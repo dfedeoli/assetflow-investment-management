@@ -16,7 +16,7 @@ from components.previdencia import render_previdencia_component
 
 # Page configuration
 st.set_page_config(
-    page_title="Investment Planner",
+    page_title="AssetFlow - Investment Management",
     page_icon="💰",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -31,7 +31,7 @@ def initialize_session_state():
 
 def render_sidebar():
     """Render sidebar with navigation and statistics"""
-    st.sidebar.title("💰 Investment Planner")
+    st.sidebar.title("💰 AssetFlow - Investment Management")
     st.sidebar.markdown("---")
 
     # Navigation

@@ -1,5 +1,5 @@
 """
-Data models for the investment planner
+Data models for AssetFlow
 """
 
 from dataclasses import dataclass

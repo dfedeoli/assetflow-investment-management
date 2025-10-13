@@ -1,5 +1,5 @@
 """
-Database connection and operations for investment planner
+Database connection and operations for AssetFlow
 """
 
 import sqlite3
