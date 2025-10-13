@@ -56,7 +56,7 @@ A comprehensive Streamlit application for managing and analyzing your investment
 
 ## Technology Stack
 
-- Python 3.13+
+- Python 3.11+
 - Streamlit
 - Pandas
 - SQLite

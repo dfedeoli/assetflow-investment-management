@@ -13,7 +13,7 @@ This is an investment portfolio management application built with Streamlit. The
 
 ## Technology Stack
 
-- **Python 3.13+** (managed via `uv`)
+- **Python 3.11+** (managed via `uv`)
 - **Streamlit** - Web application framework
 - **Pandas** - Data manipulation and analysis
 - **OpenPyXL** - Reading Excel files
