@@ -43,54 +43,8 @@ def _render_asset_classification(db: Database):
     existing_mappings = db.get_all_mappings()
     existing_labels = sorted(set(m.custom_label for m in existing_mappings))
 
-    # Quick classification form
-    with st.form("quick_classify"):
-        st.write("**Classificação Rápida**")
-
-        asset = st.selectbox("Selecione o Ativo", unmapped_assets)
-
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            # Allow selecting existing label or creating new
-            label_option = st.radio(
-                "Opção",
-                ["Usar Categoria Existente", "Criar Nova Categoria"],
-                horizontal=True
-            )
-
-            if label_option == "Usar Categoria Existente":
-                if existing_labels:
-                    custom_label = st.selectbox("Categoria", existing_labels)
-                else:
-                    st.warning("Nenhuma categoria existente. Crie uma nova.")
-                    custom_label = st.text_input("Nova Categoria")
-            else:
-                custom_label = st.text_input("Nome da Nova Categoria", placeholder="Ex: Renda Fixa Conservadora")
-
-        with col2:
-            st.write("")  # Spacing
-            st.write("")  # Spacing
-            submitted = st.form_submit_button("💾 Salvar Classificação", type="primary")
-
-        if submitted:
-            if asset and custom_label:
-                db.add_or_update_mapping(asset, custom_label)
-                st.success(f"✓ '{asset}' classificado como '{custom_label}'")
-                st.rerun()
-            else:
-                st.error("Preencha todos os campos.")
-
-    # Bulk classification
-    st.divider()
-    st.subheader("Classificação em Lote")
-
     with st.expander("📦 Classificar múltiplos ativos de uma vez"):
-        bulk_label = st.text_input(
-            "Categoria para Aplicar",
-            placeholder="Ex: Ações Brasil",
-            key="bulk_label"
-        )
+        bulk_label = _select_labels_or_create_new(existing_labels)
 
         selected_assets = st.multiselect(
             "Selecione os Ativos",
@@ -106,6 +60,49 @@ def _render_asset_classification(db: Database):
                 st.rerun()
             else:
                 st.error("Selecione ativos e defina uma categoria.")
+
+    # Quick classification form
+    with st.form("quick_classify"):
+        st.write("**Classificação Rápida**")
+
+        asset = st.selectbox("Selecione o Ativo", unmapped_assets)
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            custom_label = _select_labels_or_create_new(existing_labels)
+
+        with col2:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            submitted = st.form_submit_button("💾 Salvar Classificação", type="primary")
+
+        if submitted:
+            if asset and custom_label:
+                db.add_or_update_mapping(asset, custom_label)
+                st.success(f"✓ '{asset}' classificado como '{custom_label}'")
+                st.rerun()
+            else:
+                st.error("Preencha todos os campos.")
+
+
+def _select_labels_or_create_new(existing_labels):
+    # Allow selecting existing label or creating new
+    label_option = st.radio(
+        "Opção",
+        ["Usar Categoria Existente", "Criar Nova Categoria"],
+        horizontal=True
+    )
+
+    if label_option == "Usar Categoria Existente":
+        if existing_labels:
+            custom_label = st.selectbox("Categoria", existing_labels)
+        else:
+            st.warning("Nenhuma categoria existente. Crie uma nova.")
+            custom_label = st.text_input("Nova Categoria")
+    else:
+        custom_label = st.text_input("Nome da Nova Categoria", placeholder="Ex: Renda Fixa Conservadora")
+    return custom_label
 
 
 def _render_mapping_management(db: Database):
