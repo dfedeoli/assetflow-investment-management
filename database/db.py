@@ -245,10 +245,18 @@ class Database:
         return [self._row_to_mapping(row) for row in cursor.fetchall()]
 
     def delete_mapping(self, asset_name: str) -> bool:
-        """Delete an asset mapping"""
+        """Delete an asset mapping and clear custom_label from positions"""
         cursor = self.conn.cursor()
 
         cursor.execute("DELETE FROM asset_mappings WHERE asset_name = ?", (asset_name,))
+
+        # Clear custom_label from all positions with this asset name
+        cursor.execute("""
+            UPDATE positions
+            SET custom_label = NULL
+            WHERE name = ?
+        """, (asset_name,))
+
         self.conn.commit()
 
         return cursor.rowcount > 0
