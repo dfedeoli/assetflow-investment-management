@@ -256,6 +256,169 @@ def _render_rebalancing(positions, db: Database, total_value: float):
         max_deviation = max((abs(a.difference_percentage) for a in plan.analyses), default=0)
         st.metric("Maior Desvio", f"{max_deviation:.1f}%")
 
+    # Asset-level recommendations
+    st.divider()
+    st.write("**📋 Detalhamento por Ativo**")
+    st.caption("Veja quanto investir ou desinvestir em cada ativo dentro de cada categoria")
+
+    _render_asset_level_rebalancing(positions, plan, additional_investment)
+
+
+def _render_asset_level_rebalancing(positions, plan, additional_investment):
+    """Render asset-level rebalancing recommendations"""
+
+    # Group positions by custom label
+    positions_by_label = {}
+    for pos in positions:
+        label = pos.custom_label if pos.custom_label else "Não Classificado"
+        if label not in positions_by_label:
+            positions_by_label[label] = []
+        positions_by_label[label].append(pos)
+
+    # Sort analyses by those that need action first
+    sorted_analyses = sorted(plan.analyses, key=lambda a: (
+        a.status == 'balanced',  # Balanced last
+        -abs(a.rebalance_amount)  # Larger amounts first
+    ))
+
+    for analysis in sorted_analyses:
+        if analysis.label not in positions_by_label:
+            continue
+
+        category_positions = positions_by_label[analysis.label]
+
+        # Determine emoji and color based on status
+        if analysis.status == 'balanced':
+            status_emoji = "✅"
+            status_text = "Balanceado"
+        elif analysis.status == 'underweight':
+            status_emoji = "🔴"
+            status_text = "Abaixo da meta"
+        else:  # overweight
+            status_emoji = "⚠️"
+            status_text = "Acima da meta"
+
+        # Create expander for each category
+        with st.expander(
+            f"{status_emoji} **{analysis.label}** - {status_text} | "
+            f"Ajuste: R$ {analysis.rebalance_amount:+,.2f}",
+            expanded=(analysis.status != 'balanced' and abs(analysis.rebalance_amount) > 100)
+        ):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.metric("Valor Atual", f"R$ {analysis.current_value:,.2f}")
+                st.metric("Alocação Atual", f"{analysis.current_percentage:.2f}%")
+
+            with col2:
+                target_value = (analysis.target_percentage / 100) * plan.total_portfolio_value
+                st.metric("Valor Meta", f"R$ {target_value:,.2f}")
+                st.metric("Alocação Meta", f"{analysis.target_percentage:.2f}%")
+
+            st.divider()
+
+            # Show current assets in this category
+            st.write("**Ativos nesta categoria:**")
+
+            # Sort assets by value
+            sorted_positions = sorted(category_positions, key=lambda p: p.value, reverse=True)
+
+            asset_data = []
+            total_category_value = sum(p.value for p in sorted_positions)
+
+            for pos in sorted_positions:
+                pct_of_category = (pos.value / total_category_value * 100) if total_category_value > 0 else 0
+
+                asset_row = {
+                    'Ativo': pos.name,
+                    'Valor Atual': f"R$ {pos.value:,.2f}",
+                    '% da Categoria': f"{pct_of_category:.1f}%",
+                }
+
+                if pos.sub_category:
+                    asset_row['Subcategoria'] = pos.sub_category
+
+                asset_data.append(asset_row)
+
+            st.dataframe(asset_data, use_container_width=True, hide_index=True)
+
+            # Recommendations
+            st.divider()
+
+            if abs(analysis.rebalance_amount) < 10:
+                st.success("✅ Esta categoria está balanceada. Nenhuma ação necessária.")
+            elif analysis.rebalance_amount > 0:
+                # Need to add money
+                st.info(
+                    f"**Ação recomendada:** Investir R$ {analysis.rebalance_amount:,.2f} nesta categoria"
+                )
+
+                # Suggest distribution strategy
+                st.write("**💡 Estratégias de investimento:**")
+
+                # Strategy 1: Proportional to current holdings
+                st.write("**Opção 1 - Proporcional aos ativos atuais:**")
+                prop_data = []
+                for pos in sorted_positions:
+                    proportion = pos.value / total_category_value if total_category_value > 0 else (1 / len(sorted_positions))
+                    amount_to_invest = analysis.rebalance_amount * proportion
+                    prop_data.append({
+                        'Ativo': pos.name,
+                        'Valor a Investir': f"R$ {amount_to_invest:,.2f}",
+                        'Novo Total': f"R$ {pos.value + amount_to_invest:,.2f}"
+                    })
+                st.dataframe(prop_data, use_container_width=True, hide_index=True)
+
+                # Strategy 2: Equal distribution
+                st.write("**Opção 2 - Distribuição igual:**")
+                equal_amount = analysis.rebalance_amount / len(sorted_positions)
+                equal_data = []
+                for pos in sorted_positions:
+                    equal_data.append({
+                        'Ativo': pos.name,
+                        'Valor a Investir': f"R$ {equal_amount:,.2f}",
+                        'Novo Total': f"R$ {pos.value + equal_amount:,.2f}"
+                    })
+                st.dataframe(equal_data, use_container_width=True, hide_index=True)
+
+                # Strategy 3: Focus on specific assets
+                if len(sorted_positions) > 1:
+                    st.write("**Opção 3 - Escolha manual:**")
+                    st.caption("Selecione os ativos e distribua o investimento conforme sua estratégia")
+
+            else:
+                # Need to reduce money - only show if no additional investment
+                if additional_investment == 0:
+                    st.warning(
+                        f"**Ação recomendada:** Reduzir R$ {abs(analysis.rebalance_amount):,.2f} desta categoria"
+                    )
+
+                    st.write("**💡 Estratégias de desinvestimento:**")
+                    st.caption("⚠️ Considere adicionar novo dinheiro ao invés de vender posições existentes")
+
+                    # Strategy 1: Proportional reduction
+                    st.write("**Opção 1 - Redução proporcional:**")
+                    reduction_data = []
+                    for pos in sorted_positions:
+                        proportion = pos.value / total_category_value if total_category_value > 0 else (1 / len(sorted_positions))
+                        amount_to_reduce = abs(analysis.rebalance_amount) * proportion
+                        reduction_data.append({
+                            'Ativo': pos.name,
+                            'Valor a Reduzir': f"R$ {amount_to_reduce:,.2f}",
+                            'Novo Total': f"R$ {max(0, pos.value - amount_to_reduce):,.2f}"
+                        })
+                    st.dataframe(reduction_data, use_container_width=True, hide_index=True)
+
+                    # Strategy 2: Sell specific positions
+                    st.write("**Opção 2 - Vender posições específicas:**")
+                    st.caption("Considere vender ativos começando pelos de menor valor ou menor performance")
+                else:
+                    # Has additional investment but category is still overweight
+                    st.info(
+                        f"💡 Esta categoria está {abs(analysis.difference_percentage):.1f}% acima da meta. "
+                        f"Considere não adicionar mais recursos aqui e focar nas categorias abaixo da meta."
+                    )
+
 
 def _render_asset_details(positions):
     """Render detailed asset list"""
