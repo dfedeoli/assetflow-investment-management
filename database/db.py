@@ -62,6 +62,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 custom_label TEXT UNIQUE NOT NULL,
                 target_percentage REAL NOT NULL,
+                reserve_amount REAL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -275,17 +276,18 @@ class Database:
 
     # ==================== Target Allocation Operations ====================
 
-    def add_or_update_target(self, custom_label: str, target_percentage: float) -> int:
+    def add_or_update_target(self, custom_label: str, target_percentage: float, reserve_amount: float = None) -> int:
         """Add or update a target allocation"""
         cursor = self.conn.cursor()
 
         cursor.execute("""
-            INSERT INTO target_allocations (custom_label, target_percentage, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO target_allocations (custom_label, target_percentage, reserve_amount, updated_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(custom_label) DO UPDATE SET
                 target_percentage = excluded.target_percentage,
+                reserve_amount = excluded.reserve_amount,
                 updated_at = excluded.updated_at
-        """, (custom_label, target_percentage, datetime.now().isoformat()))
+        """, (custom_label, target_percentage, reserve_amount, datetime.now().isoformat()))
 
         self.conn.commit()
         return cursor.lastrowid
@@ -353,10 +355,17 @@ class Database:
 
     def _row_to_target(self, row: sqlite3.Row) -> TargetAllocation:
         """Convert database row to TargetAllocation object"""
+        # Check if reserve_amount column exists
+        try:
+            reserve_amount = row['reserve_amount']
+        except (KeyError, IndexError):
+            reserve_amount = None
+
         return TargetAllocation(
             id=row['id'],
             custom_label=row['custom_label'],
             target_percentage=row['target_percentage'],
+            reserve_amount=reserve_amount,
             created_at=datetime.fromisoformat(row['created_at']),
             updated_at=datetime.fromisoformat(row['updated_at'])
         )

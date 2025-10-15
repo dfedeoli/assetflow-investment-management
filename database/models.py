@@ -57,6 +57,7 @@ class TargetAllocation:
     id: Optional[int] = None
     custom_label: str = ""
     target_percentage: float = 0.0
+    reserve_amount: Optional[float] = None  # Minimum amount to keep as reserve
     created_at: datetime = None
     updated_at: datetime = None
 
@@ -66,6 +67,7 @@ class TargetAllocation:
             'id': self.id,
             'custom_label': self.custom_label,
             'target_percentage': self.target_percentage,
+            'reserve_amount': self.reserve_amount,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
