@@ -184,6 +184,13 @@ The application follows a modular architecture with clear separation of concerns
 
 ## Important Implementation Notes
 
+### Documentation Requirements
+- **ALWAYS update CHANGELOG.md** when making any code changes
+- Document new features, bug fixes, and breaking changes in the `[Unreleased]` section
+- Follow the [Keep a Changelog](https://keepachangelog.com/) format
+- Include technical implementation details for developers
+- When releasing a version, move unreleased changes to a dated version section
+
 ### Data Formats
 - The XLSX parser assumes Brazilian format (R$, comma as decimal separator)
 - Position dates are stored as ISO format strings in SQLite
