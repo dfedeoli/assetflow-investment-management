@@ -104,3 +104,56 @@ class SubLabelTarget:
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+
+@dataclass
+class AnnualIncomeEntry:
+    """Annual income entry for PGBL tax planning"""
+    id: Optional[int] = None
+    year: int = 0
+    month: int = 0  # 1-12
+    entry_type: str = ""  # salary, vacation, vacation_bonus, pension, rental, thirteenth, plr, other
+    amount: float = 0.0
+    description: Optional[str] = None
+    date_added: datetime = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            'id': self.id,
+            'year': self.year,
+            'month': self.month,
+            'entry_type': self.entry_type,
+            'amount': self.amount,
+            'description': self.description,
+            'date_added': self.date_added.isoformat() if self.date_added else None
+        }
+
+    @property
+    def is_taxable(self) -> bool:
+        """Check if this entry type is taxable for PGBL calculation"""
+        # 13th salary and PLR are NOT included in taxable income for PGBL
+        non_taxable = ['thirteenth', 'plr']
+        return self.entry_type not in non_taxable
+
+
+@dataclass
+class PGBLYearSettings:
+    """PGBL year settings for tax planning"""
+    id: Optional[int] = None
+    year: int = 0
+    contributes_to_inss: bool = True  # Required for PGBL deduction
+    notes: Optional[str] = None
+    created_at: datetime = None
+    updated_at: datetime = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            'id': self.id,
+            'year': self.year,
+            'contributes_to_inss': self.contributes_to_inss,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }

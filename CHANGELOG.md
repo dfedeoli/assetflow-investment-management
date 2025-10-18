@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **PGBL Tax Planning & Income Tracker**: Comprehensive tax planning tool for maximizing PGBL (Previdência Privada) deductions:
+  - New "📊 Planejamento PGBL" tab in Previdência component
+  - **Monthly income tracking**: Record all income sources (salary, vacation, bonuses, rental income, etc.) throughout the year
+  - **Automatic tax calculation**: System calculates 12% limit based on taxable income (excludes 13th salary and PLR per Brazilian tax law)
+  - **Real-time PGBL contribution tracking**: Auto-detects contributions from Previdência positions by year
+  - **Smart recommendations**: Shows exactly how much more to invest to maximize tax deduction
+  - **Progress visualization**: Progress bar and completion percentage for the 12% limit
+  - **Year-over-year planning**: Select any year (past or future) for tax planning
+  - **INSS requirement tracking**: Checkbox to confirm INSS contribution (mandatory for PGBL deduction)
+  - **Deadline alerts**: Countdown to December 31st deadline with urgency indicators
+  - **Income categorization**:
+    - Taxable income: Salário, Férias, 1/3 Férias, Pensão, Aluguel, Outro
+    - Non-taxable (excluded): 13º Salário, PLR (correct per Brazilian tax code)
+  - **Detailed breakdowns**:
+    - Summary cards: Taxable income YTD, PGBL limit (12%), invested amount, remaining to invest
+    - Monthly breakdown table showing total and taxable income per month
+    - Income type summary with taxable status indicators
+  - **Annual projection**: Extrapolates full-year income based on months entered
+  - **Entry management**: Add, view, and delete income entries with descriptions
+  - **Tax benefit estimation**: Calculates potential tax savings from contributions
 - **XLSX Import Review & Edit**: Users can now review and edit uploaded XLSX files before saving to the database:
   - New two-stage workflow: Upload → Preview → Edit → Confirm → Save
   - Editable interface showing all parsed positions with current values
@@ -79,6 +99,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **PGBL Tax Planning Implementation**:
+  - New database tables: `annual_income_entries` and `pgbl_year_settings` (database/db.py:97-132)
+  - New data models: `AnnualIncomeEntry` and `PGBLYearSettings` (database/models.py:109-159)
+  - `AnnualIncomeEntry` includes `is_taxable` property to determine if income type counts toward PGBL limit
+  - Database indexes on year and year+month for efficient querying (database/db.py:130-132)
+  - New utility module: `utils/pgbl_tax_calculator.py` with functions:
+    - `calculate_taxable_income()`: Filters and sums only taxable income types
+    - `calculate_pgbl_limit()`: Returns 12% of taxable income
+    - `calculate_remaining_investment()`: Calculates gap to 12% limit
+    - `project_annual_income()`: Extrapolates based on months with data
+    - `calculate_tax_benefit()`: Estimates tax savings from contributions
+    - `get_status_info()`: Returns status, emoji, and color based on completion %
+    - `calculate_days_until_deadline()`: Days remaining until Dec 31st
+  - Income type constants with Portuguese display names (utils/pgbl_tax_calculator.py:17-28)
+  - Database CRUD operations for income entries and year settings (database/db.py:660-778)
+  - New tab in Previdência component: `_render_pgbl_planning()` (components/previdencia.py:453-768)
+  - Auto-detection of PGBL contributions by filtering positions by year and "Previdência" label
+  - Migration script: `utils/migrate_pgbl_tracker.py` for existing databases (idempotent)
+  - Year selector with range (current year ± 2) for planning past/future years
+  - Form-based income entry with month selector, income type dropdown, amount, and description
+  - Real-time aggregations: by month, by income type, taxable vs non-taxable totals
+  - Progress bar uses `st.progress()` with capped value (min 0%, max 100%)
+  - Status messages dynamically change based on completion: info (0-90%), warning (90-99%), success (100%+)
+  - Deadline countdown only shown for current year with conditional styling
 - **XLSX Import Review Implementation**:
   - Session state variables for XLSX editing: `xlsx_positions`, `xlsx_metadata`, `xlsx_positions_to_remove`, `xlsx_new_positions`, `xlsx_original_values` (components/upload.py:33-38)
   - Two-stage rendering: `_render_xlsx_upload()` handles upload/preview, `_render_xlsx_editing()` handles editing stage (components/upload.py:28-121)

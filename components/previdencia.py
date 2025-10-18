@@ -5,8 +5,11 @@ Previdencia specialized component with sub-classification
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from datetime import datetime
 from database.db import Database
+from database.models import AnnualIncomeEntry, PGBLYearSettings
 from utils.calculations import PortfolioCalculator
+from utils import pgbl_tax_calculator as pgbl_calc
 
 
 def render_previdencia_component(db: Database):
@@ -36,11 +39,12 @@ def render_previdencia_component(db: Database):
     st.divider()
 
     # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Visão Geral",
         "Sub-Classificação",
         "Definir Metas",
-        "Rebalanceamento"
+        "Rebalanceamento",
+        "📊 Planejamento PGBL"
     ])
 
     with tab1:
@@ -54,6 +58,9 @@ def render_previdencia_component(db: Database):
 
     with tab4:
         _render_rebalancing(positions, db, total_value)
+
+    with tab5:
+        _render_pgbl_planning(db)
 
 
 def _render_overview(positions, db: Database):
@@ -441,3 +448,321 @@ def _render_rebalancing(positions, db: Database, total_value: float):
     with col3:
         max_deviation = max((abs(a.difference_percentage) for a in plan.analyses), default=0)
         st.metric("Maior Desvio", f"{max_deviation:.1f}%")
+
+
+def _render_pgbl_planning(db: Database):
+    """Render PGBL tax planning dashboard"""
+    st.subheader("📊 Planejamento PGBL - Benefício Fiscal")
+
+    st.markdown("""
+    **Como funciona o benefício fiscal do PGBL:**
+    - Você pode deduzir até **12% da sua renda bruta tributável anual** investindo em PGBL
+    - Isso **reduz o Imposto de Renda** a pagar ou aumenta a restituição
+    - **Prazo**: Investimentos até 31 de dezembro contam para a declaração do ano seguinte
+    - **Requisito**: Você deve contribuir para o INSS ou regime próprio de previdência
+
+    ℹ️ Use esta ferramenta para acompanhar sua renda ao longo do ano e calcular quanto investir em PGBL.
+    """)
+
+    st.divider()
+
+    # Year selector
+    current_year = datetime.now().year
+    selected_year = st.selectbox(
+        "📅 Selecione o Ano",
+        options=list(range(current_year - 2, current_year + 2)),
+        index=2,  # Current year
+        help="Escolha o ano para planejamento do PGBL"
+    )
+
+    # Get or create year settings
+    year_settings = db.get_year_settings(selected_year)
+    if not year_settings:
+        year_settings = PGBLYearSettings(
+            year=selected_year,
+            contributes_to_inss=True
+        )
+        db.add_or_update_year_settings(year_settings)
+
+    # INSS contribution checkbox
+    st.divider()
+    contributes_to_inss = st.checkbox(
+        "✅ Contribuo para o INSS ou regime próprio de previdência",
+        value=year_settings.contributes_to_inss,
+        help="Requisito obrigatório para deduzir PGBL no IR"
+    )
+
+    if contributes_to_inss != year_settings.contributes_to_inss:
+        year_settings.contributes_to_inss = contributes_to_inss
+        db.add_or_update_year_settings(year_settings)
+
+    if not contributes_to_inss:
+        st.warning("⚠️ **Atenção**: Sem contribuição ao INSS, você NÃO pode deduzir o PGBL no Imposto de Renda!")
+
+    # Get income entries for the year
+    income_entries = db.get_income_entries_by_year(selected_year)
+
+    # Calculate metrics
+    taxable_income = pgbl_calc.calculate_taxable_income(income_entries)
+    pgbl_limit = pgbl_calc.calculate_pgbl_limit(taxable_income)
+
+    # Get PGBL contributions (positions from Previdência in selected year)
+    start_of_year = datetime(selected_year, 1, 1)
+    end_of_year = datetime(selected_year, 12, 31, 23, 59, 59)
+    pgbl_positions = db.get_positions_between_dates(start_of_year, end_of_year)
+    pgbl_positions = [p for p in pgbl_positions if p.custom_label == "Previdência"]
+
+    # Sum invested values (or current values if invested_value is not available)
+    current_pgbl_contributions = sum(
+        p.invested_value if p.invested_value else p.value for p in pgbl_positions
+    )
+
+    remaining_investment = pgbl_calc.calculate_remaining_investment(pgbl_limit, current_pgbl_contributions)
+    completion_pct = pgbl_calc.calculate_completion_percentage(pgbl_limit, current_pgbl_contributions)
+    status, status_emoji, status_color = pgbl_calc.get_status_info(completion_pct)
+
+    # Display summary cards
+    st.divider()
+    st.subheader("💰 Resumo do Ano")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "Renda Bruta Tributável",
+            f"R$ {taxable_income:,.2f}",
+            help="Soma de salários, férias, aluguéis, etc. (excl. 13º e PLR)"
+        )
+
+    with col2:
+        st.metric(
+            "Limite PGBL (12%)",
+            f"R$ {pgbl_limit:,.2f}",
+            help="Máximo que pode deduzir investindo em PGBL"
+        )
+
+    with col3:
+        st.metric(
+            "Já Investido em PGBL",
+            f"R$ {current_pgbl_contributions:,.2f}",
+            help="Total de contribuições em Previdência neste ano"
+        )
+
+    with col4:
+        delta_color = "normal" if remaining_investment >= 0 else "inverse"
+        st.metric(
+            "Ainda Pode Investir",
+            f"R$ {max(0, remaining_investment):,.2f}",
+            delta=f"{completion_pct:.1f}% do limite usado",
+            delta_color=delta_color,
+            help="Quanto falta para atingir o limite de 12%"
+        )
+
+    # Progress bar
+    st.progress(min(completion_pct / 100, 1.0))
+
+    # Status message
+    if completion_pct >= 100:
+        st.success(f"{status_emoji} **Parabéns!** Você já atingiu ou ultrapassou o limite de 12%. Suas contribuições estão otimizadas para o benefício fiscal.")
+    elif completion_pct >= 90:
+        st.warning(f"{status_emoji} **Quase lá!** Faltam apenas R$ {remaining_investment:,.2f} para atingir o limite de dedução.")
+    elif completion_pct > 0:
+        st.info(f"{status_emoji} Você ainda tem R$ {remaining_investment:,.2f} disponíveis para investir em PGBL e maximizar seu benefício fiscal.")
+    else:
+        st.info(f"{status_emoji} Comece a registrar sua renda abaixo para calcular quanto pode investir em PGBL.")
+
+    # Deadline reminder
+    if selected_year == current_year:
+        days_left = pgbl_calc.calculate_days_until_deadline(current_year)
+        if days_left > 0:
+            st.warning(f"⏰ **Prazo**: Faltam **{days_left} dias** até 31/12/{current_year} para investir em PGBL e deduzir neste ano!")
+        elif days_left == 0:
+            st.error("🚨 **ÚLTIMO DIA** para investir em PGBL e deduzir no IR deste ano!")
+
+    # Income tracking section
+    st.divider()
+    st.subheader("📝 Registro de Renda Mensal")
+
+    # Add new income entry
+    with st.expander("➕ Adicionar Nova Entrada de Renda", expanded=len(income_entries) == 0):
+        with st.form("add_income_entry"):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                month = st.selectbox(
+                    "Mês",
+                    options=list(range(1, 13)),
+                    format_func=lambda m: [
+                        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+                    ][m - 1]
+                )
+
+                entry_type = st.selectbox(
+                    "Tipo de Renda",
+                    options=list(pgbl_calc.INCOME_TYPES.keys()),
+                    format_func=lambda x: pgbl_calc.get_income_type_display_name(x)
+                )
+
+            with col2:
+                amount = st.number_input(
+                    "Valor (R$)",
+                    min_value=0.0,
+                    step=100.0,
+                    format="%.2f"
+                )
+
+                description = st.text_input(
+                    "Descrição (opcional)",
+                    placeholder="Ex: Salário mensal, Aluguel apt 101"
+                )
+
+            # Show if this type is taxable
+            is_taxable = pgbl_calc.is_taxable_income_type(entry_type)
+            if not is_taxable:
+                st.info(f"ℹ️ **{pgbl_calc.get_income_type_display_name(entry_type)}** não entra no cálculo do PGBL (tributação exclusiva na fonte)")
+
+            submitted = st.form_submit_button("💾 Adicionar Entrada", type="primary")
+
+            if submitted:
+                if amount > 0:
+                    new_entry = AnnualIncomeEntry(
+                        year=selected_year,
+                        month=month,
+                        entry_type=entry_type,
+                        amount=amount,
+                        description=description,
+                        date_added=datetime.now()
+                    )
+                    db.add_income_entry(new_entry)
+                    st.success(f"✓ Entrada adicionada: {pgbl_calc.get_income_type_display_name(entry_type)} - R$ {amount:,.2f}")
+                    st.rerun()
+                else:
+                    st.error("O valor deve ser maior que zero!")
+
+    # Display existing entries
+    if income_entries:
+        st.subheader("📊 Entradas Registradas")
+
+        # Group by month for display
+        monthly_totals = pgbl_calc.categorize_income_by_month(income_entries)
+        by_type = pgbl_calc.categorize_income_by_type(income_entries)
+
+        # Create display table
+        entry_data = []
+        for entry in income_entries:
+            entry_data.append({
+                'ID': entry.id,
+                'Mês': ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+                        "Jul", "Ago", "Set", "Out", "Nov", "Dez"][entry.month - 1],
+                'Tipo': pgbl_calc.get_income_type_display_name(entry.entry_type),
+                'Valor': f"R$ {entry.amount:,.2f}",
+                'Tributável': "✅" if entry.is_taxable else "❌",
+                'Descrição': entry.description or "-"
+            })
+
+        df_entries = pd.DataFrame(entry_data)
+
+        # Show table
+        st.dataframe(
+            df_entries[['Mês', 'Tipo', 'Valor', 'Tributável', 'Descrição']],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # Delete entries
+        st.write("**Deletar Entrada**")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            entry_to_delete = st.selectbox(
+                "Selecione a entrada para deletar",
+                options=[e.id for e in income_entries],
+                format_func=lambda id: next(
+                    f"{e.month:02d} - {pgbl_calc.get_income_type_display_name(e.entry_type)} - R$ {e.amount:,.2f}"
+                    for e in income_entries if e.id == id
+                )
+            )
+        with col2:
+            if st.button("🗑️ Deletar", type="secondary"):
+                db.delete_income_entry(entry_to_delete)
+                st.success("Entrada deletada!")
+                st.rerun()
+
+        # Monthly breakdown
+        st.divider()
+        st.subheader("📅 Resumo Mensal")
+
+        month_data = []
+        for month_num in range(1, 13):
+            month_name = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                          "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][month_num - 1]
+            month_total = monthly_totals.get(month_num, 0.0)
+            month_entries = [e for e in income_entries if e.month == month_num]
+            month_taxable = sum(e.amount for e in month_entries if e.is_taxable)
+
+            month_data.append({
+                'Mês': month_name,
+                'Total': f"R$ {month_total:,.2f}",
+                'Tributável': f"R$ {month_taxable:,.2f}",
+                'Entradas': len(month_entries)
+            })
+
+        st.dataframe(month_data, use_container_width=True, hide_index=True)
+
+        # Breakdown by type
+        st.divider()
+        st.subheader("📋 Resumo por Tipo de Renda")
+
+        type_data = []
+        for entry_type, total in sorted(by_type.items(), key=lambda x: x[1], reverse=True):
+            type_name = pgbl_calc.get_income_type_display_name(entry_type)
+            is_taxable = pgbl_calc.is_taxable_income_type(entry_type)
+            count = sum(1 for e in income_entries if e.entry_type == entry_type)
+
+            type_data.append({
+                'Tipo': type_name,
+                'Total': f"R$ {total:,.2f}",
+                'Tributável': "✅" if is_taxable else "❌ (excluído)",
+                'Entradas': count
+            })
+
+        st.dataframe(type_data, use_container_width=True, hide_index=True)
+
+    else:
+        st.info("📭 Nenhuma entrada de renda registrada ainda. Adicione suas rendas mensais acima para começar o planejamento.")
+
+    # Projection section
+    if income_entries:
+        st.divider()
+        st.subheader("🔮 Projeção Anual")
+
+        months_with_data = len(set(e.month for e in income_entries))
+        projected_income = pgbl_calc.project_annual_income(taxable_income, months_with_data)
+        projected_limit = pgbl_calc.calculate_pgbl_limit(projected_income)
+        projected_remaining = projected_limit - current_pgbl_contributions
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Meses com Dados",
+                f"{months_with_data}/12"
+            )
+
+        with col2:
+            st.metric(
+                "Renda Projetada (Anual)",
+                f"R$ {projected_income:,.2f}",
+                help="Baseado na média mensal dos meses informados"
+            )
+
+        with col3:
+            st.metric(
+                "Limite PGBL Projetado",
+                f"R$ {projected_limit:,.2f}",
+                delta=f"R$ {max(0, projected_remaining):,.2f} faltando",
+                help="12% da renda projetada"
+            )
+
+        if months_with_data < 12:
+            st.info(f"ℹ️ Projeção baseada em {months_with_data} meses de dados. Continue registrando suas rendas para uma estimativa mais precisa!")

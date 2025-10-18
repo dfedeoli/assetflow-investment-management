@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 
-from .models import Position, AssetMapping, TargetAllocation, SubLabelMapping, SubLabelTarget
+from .models import Position, AssetMapping, TargetAllocation, SubLabelMapping, SubLabelTarget, AnnualIncomeEntry, PGBLYearSettings
 
 
 class Database:
@@ -94,6 +94,32 @@ class Database:
             )
         """)
 
+        # Annual income entries table for PGBL tax planning
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS annual_income_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                entry_type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                description TEXT,
+                date_added TEXT DEFAULT CURRENT_TIMESTAMP,
+                CHECK(month >= 1 AND month <= 12)
+            )
+        """)
+
+        # PGBL year settings table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pgbl_year_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER UNIQUE NOT NULL,
+                contributes_to_inss INTEGER NOT NULL DEFAULT 1,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Create indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_date ON positions(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_label ON positions(custom_label)")
@@ -101,6 +127,9 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_sub_label ON positions(sub_label)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sub_label_mappings_parent ON sub_label_mappings(parent_label)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sub_label_targets_parent ON sub_label_targets(parent_label)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_income_entries_year ON annual_income_entries(year)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_income_entries_year_month ON annual_income_entries(year, month)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pgbl_year_settings_year ON pgbl_year_settings(year)")
 
         # Initialize default custom labels
         self._initialize_default_labels(cursor)
@@ -627,6 +656,126 @@ class Database:
         stats['unmapped_assets'] = cursor.fetchone()['count']
 
         return stats
+
+    # ==================== PGBL Income Tracking Operations ====================
+
+    def add_income_entry(self, entry: AnnualIncomeEntry) -> int:
+        """Add a new income entry"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO annual_income_entries (year, month, entry_type, amount, description, date_added)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            entry.year,
+            entry.month,
+            entry.entry_type,
+            entry.amount,
+            entry.description,
+            entry.date_added.isoformat() if entry.date_added else datetime.now().isoformat()
+        ))
+
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_income_entries_by_year(self, year: int) -> List[AnnualIncomeEntry]:
+        """Get all income entries for a specific year"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM annual_income_entries
+            WHERE year = ?
+            ORDER BY month, id
+        """, (year,))
+
+        return [self._row_to_income_entry(row) for row in cursor.fetchall()]
+
+    def get_income_entries_by_year_month(self, year: int, month: int) -> List[AnnualIncomeEntry]:
+        """Get income entries for a specific year and month"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM annual_income_entries
+            WHERE year = ? AND month = ?
+            ORDER BY id
+        """, (year, month))
+
+        return [self._row_to_income_entry(row) for row in cursor.fetchall()]
+
+    def update_income_entry(self, entry_id: int, entry: AnnualIncomeEntry) -> bool:
+        """Update an income entry"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            UPDATE annual_income_entries
+            SET year = ?, month = ?, entry_type = ?, amount = ?, description = ?
+            WHERE id = ?
+        """, (entry.year, entry.month, entry.entry_type, entry.amount, entry.description, entry_id))
+
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_income_entry(self, entry_id: int) -> bool:
+        """Delete an income entry"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("DELETE FROM annual_income_entries WHERE id = ?", (entry_id,))
+        self.conn.commit()
+
+        return cursor.rowcount > 0
+
+    def get_year_settings(self, year: int) -> Optional[PGBLYearSettings]:
+        """Get PGBL settings for a specific year"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("SELECT * FROM pgbl_year_settings WHERE year = ?", (year,))
+        row = cursor.fetchone()
+
+        return self._row_to_year_settings(row) if row else None
+
+    def add_or_update_year_settings(self, settings: PGBLYearSettings) -> int:
+        """Add or update year settings"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO pgbl_year_settings (year, contributes_to_inss, notes, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(year) DO UPDATE SET
+                contributes_to_inss = excluded.contributes_to_inss,
+                notes = excluded.notes,
+                updated_at = excluded.updated_at
+        """, (
+            settings.year,
+            1 if settings.contributes_to_inss else 0,
+            settings.notes,
+            datetime.now().isoformat()
+        ))
+
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def _row_to_income_entry(self, row: sqlite3.Row) -> AnnualIncomeEntry:
+        """Convert database row to AnnualIncomeEntry object"""
+        return AnnualIncomeEntry(
+            id=row['id'],
+            year=row['year'],
+            month=row['month'],
+            entry_type=row['entry_type'],
+            amount=row['amount'],
+            description=row['description'],
+            date_added=datetime.fromisoformat(row['date_added'])
+        )
+
+    def _row_to_year_settings(self, row: sqlite3.Row) -> PGBLYearSettings:
+        """Convert database row to PGBLYearSettings object"""
+        return PGBLYearSettings(
+            id=row['id'],
+            year=row['year'],
+            contributes_to_inss=bool(row['contributes_to_inss']),
+            notes=row['notes'],
+            created_at=datetime.fromisoformat(row['created_at']),
+            updated_at=datetime.fromisoformat(row['updated_at'])
+        )
 
     def close(self):
         """Close database connection"""
