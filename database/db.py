@@ -102,7 +102,44 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sub_label_mappings_parent ON sub_label_mappings(parent_label)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sub_label_targets_parent ON sub_label_targets(parent_label)")
 
+        # Initialize default custom labels
+        self._initialize_default_labels(cursor)
+
         self.conn.commit()
+
+    def _initialize_default_labels(self, cursor):
+        """Initialize default custom labels if they don't exist"""
+        default_labels = [
+            {
+                'custom_label': 'Previdência',
+                'target_percentage': 0.0,
+                'reserve_amount': None
+            },
+            {
+                'custom_label': 'Segurança',
+                'target_percentage': 0.0,
+                'reserve_amount': None
+            }
+        ]
+
+        for label_data in default_labels:
+            # Check if label already exists
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM target_allocations WHERE custom_label = ?",
+                (label_data['custom_label'],)
+            )
+            exists = cursor.fetchone()['count'] > 0
+
+            # Insert only if it doesn't exist
+            if not exists:
+                cursor.execute("""
+                    INSERT INTO target_allocations (custom_label, target_percentage, reserve_amount)
+                    VALUES (?, ?, ?)
+                """, (
+                    label_data['custom_label'],
+                    label_data['target_percentage'],
+                    label_data['reserve_amount']
+                ))
 
     # ==================== Position Operations ====================
 
