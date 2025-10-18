@@ -13,16 +13,16 @@ def render_upload_component(db: Database):
     """Render the file upload interface"""
     st.header("📁 Importar Posições")
 
-    tab1, tab2, tab3 = st.tabs(["Entrada Manual", "Upload XLSX", "Atualizar Posições"])
+    tab1, tab2, tab3 = st.tabs(["Entrada Manual", "Atualizar Posições", "Upload XLSX"])
 
     with tab1:
         _render_manual_entry(db)
 
     with tab2:
-        _render_xlsx_upload(db)
+        _render_update_positions(db)
 
     with tab3:
-        _render_update_positions(db)
+         _render_xlsx_upload(db)
 
 
 def _render_xlsx_upload(db: Database):
@@ -213,6 +213,12 @@ def _render_update_positions(db: Database):
         st.session_state.edit_same_date = False
 
     col1, col2 = st.columns(2)
+    # Checkbox to toggle edit mode
+    edit_same_date = st.checkbox(
+        "✏️ Editar na mesma data",
+        value=False,
+        help="Marque para editar valores na mesma data. Desmarque para criar posições em uma nova data."
+    )
 
     with col1:
         base_date = st.selectbox(
@@ -223,13 +229,6 @@ def _render_update_positions(db: Database):
         )
 
     with col2:
-        # Checkbox to toggle edit mode
-        edit_same_date = st.checkbox(
-            "✏️ Editar na mesma data",
-            value=False,
-            help="Marque para editar valores na mesma data. Desmarque para criar posições em uma nova data."
-        )
-
         # Date input - disabled if editing same date
         if edit_same_date:
             st.date_input(
