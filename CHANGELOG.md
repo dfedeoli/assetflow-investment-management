@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clear visual status indicators (✅ balanced, 🔴 underweight, ⚠️ overweight)
 
 ### Changed
+- **Visualization Improvements**: Replaced bar charts with interactive Plotly donut charts in "Visão Geral" tabs. Donut charts better represent portfolio proportions for rebalancing decisions. Features include:
+  - Interactive hover tooltips showing values and percentages
+  - Total portfolio value displayed in the center of the donut
+  - Clear visual representation of allocation distribution
+  - Applied to both Dashboard and Previdência components
 - **Dashboard Filtering**: Labels with 0% target allocation are now excluded from "Visão Geral" and "Rebalanceamento" tabs, but all assets remain visible in "Detalhes por Ativo" tab. This allows users to have custom labels (like Previdência and Segurança) that don't participate in active portfolio management but can still be tracked
 - **Detalhes por Ativo UI**: Filters are now hidden in a collapsible expander (collapsed by default) to reduce visual clutter. Sort dropdown remains visible for easy access
 - Upload component now has three tabs: "Entrada Manual", "Upload XLSX", and "Atualizar Posições"
@@ -40,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- Added `plotly` dependency (version 6.3.1) for interactive visualizations
+- Replaced `st.bar_chart` with `plotly.graph_objects.Pie` (hole=0.45) for donut charts
+- Donut charts implemented in Dashboard (components/dashboard.py:129-155) and Previdência (components/previdencia.py:91-117)
+- Chart configuration: 45% hole size, outside label positioning, interactive hover templates, center annotations showing total value
 - Added `_initialize_default_labels()` method in Database class (database/db.py:110-142)
 - Default labels are inserted only if they don't already exist (idempotent operation)
 - Labels created with 0% target allocation and no reserve amount (can be customized later)

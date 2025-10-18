@@ -75,7 +75,7 @@ def _render_timeline(db: Database, dates: list):
     df = pd.DataFrame(timeline_data)
 
     # Plot value over time
-    st.line_chart(df.set_index('Data')['Valor Total'], use_container_width=True)
+    st.line_chart(df.set_index('Data')['Valor Total'], width="stretch")
 
     # Calculate growth
     if len(timeline_data) >= 2:
@@ -123,7 +123,7 @@ def _render_timeline(db: Database, dates: list):
 
         display_data.append(item)
 
-    st.dataframe(display_data, use_container_width=True, hide_index=True)
+    st.dataframe(display_data, width="stretch", hide_index=True)
 
 
 def _render_comparison(db: Database, dates: list):
@@ -209,7 +209,7 @@ def _render_comparison(db: Database, dates: list):
             'Variação %': f"{data['growth_pct']:+.1f}%"
         })
 
-    st.dataframe(comparison_data, use_container_width=True, hide_index=True)
+    st.dataframe(comparison_data, width="stretch", hide_index=True)
 
     # Identify new and removed positions
     st.divider()
@@ -295,7 +295,7 @@ def _render_category_evolution(db: Database, dates: list):
     df = pd.DataFrame(chart_data)
 
     # Display line chart
-    st.line_chart(df.set_index('Data'), use_container_width=True)
+    st.line_chart(df.set_index('Data'), width="stretch")
 
     # Display percentage evolution
     st.divider()
@@ -313,4 +313,4 @@ def _render_category_evolution(db: Database, dates: list):
 
         pct_data.append(row)
 
-    st.dataframe(pct_data, use_container_width=True, hide_index=True)
+    st.dataframe(pct_data, width="stretch", hide_index=True)

@@ -4,6 +4,7 @@ Portfolio dashboard component
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from database.db import Database
 from utils.calculations import PortfolioCalculator
 
@@ -70,7 +71,7 @@ def render_dashboard_component(db: Database):
                 })
 
             if excluded_data:
-                st.dataframe(excluded_data, use_container_width=True, hide_index=True)
+                st.dataframe(excluded_data, width="stretch", hide_index=True)
                 if len(excluded_positions) > 10:
                     st.caption(f"Mostrando 10 de {len(excluded_positions)} posições excluídas")
 
@@ -125,8 +126,33 @@ def _render_overview(positions, db: Database):
 
         df = pd.DataFrame(alloc_data)
 
-        # Display as bar chart
-        st.bar_chart(df.set_index('Categoria')['Valor'], use_container_width=True)
+        # Display as donut chart
+        total_value = df['Valor'].sum()
+
+        fig = go.Figure(data=[go.Pie(
+            labels=df['Categoria'],
+            values=df['Valor'],
+            hole=0.40,  # Creates donut effect
+            hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>',
+            textinfo='label+percent',
+            textposition='outside'
+        )])
+
+        fig.update_layout(
+            annotations=[dict(
+                text=f'<b>Total</b><br>R$ {total_value:,.0f}',
+                x=0.5, y=0.5,
+                font_size=16,
+                showarrow=False,
+                align='center'
+            )],
+            showlegend=True,
+            legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05),
+            height=500,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+
+        st.plotly_chart(fig, width="stretch")
 
         # Display as table
         st.dataframe(
@@ -134,7 +160,7 @@ def _render_overview(positions, db: Database):
                 'Valor (Formatado)': 'Valor',
                 'Porcentagem (Formatada)': '%'
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
     else:
@@ -156,7 +182,7 @@ def _render_overview(positions, db: Database):
             '%': f"{pct:.1f}%"
         })
 
-    st.dataframe(sub_data, use_container_width=True, hide_index=True)
+    st.dataframe(sub_data, width="stretch", hide_index=True)
 
 
 def _render_rebalancing(positions, db: Database, total_value: float):
@@ -221,7 +247,7 @@ def _render_rebalancing(positions, db: Database, total_value: float):
             'Ajuste Necessário': f"R$ {analysis.rebalance_amount:+,.2f}" if abs(analysis.rebalance_amount) > 1 else "✓"
         })
 
-    st.dataframe(comparison_data, use_container_width=True, hide_index=True)
+    st.dataframe(comparison_data, width="stretch", hide_index=True)
 
     # Display suggestions
     if plan.suggestions:
@@ -341,7 +367,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
 
                 asset_data.append(asset_row)
 
-            st.dataframe(asset_data, use_container_width=True, hide_index=True)
+            st.dataframe(asset_data, width="stretch", hide_index=True)
 
             # Recommendations
             st.divider()
@@ -368,7 +394,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                         'Valor a Investir': f"R$ {amount_to_invest:,.2f}",
                         'Novo Total': f"R$ {pos.value + amount_to_invest:,.2f}"
                     })
-                st.dataframe(prop_data, use_container_width=True, hide_index=True)
+                st.dataframe(prop_data, width="stretch", hide_index=True)
 
                 # Strategy 2: Equal distribution
                 st.write("**Opção 2 - Distribuição igual:**")
@@ -380,7 +406,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                         'Valor a Investir': f"R$ {equal_amount:,.2f}",
                         'Novo Total': f"R$ {pos.value + equal_amount:,.2f}"
                     })
-                st.dataframe(equal_data, use_container_width=True, hide_index=True)
+                st.dataframe(equal_data, width="stretch", hide_index=True)
 
                 # Strategy 3: Focus on specific assets
                 if len(sorted_positions) > 1:
@@ -408,7 +434,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                             'Valor a Reduzir': f"R$ {amount_to_reduce:,.2f}",
                             'Novo Total': f"R$ {max(0, pos.value - amount_to_reduce):,.2f}"
                         })
-                    st.dataframe(reduction_data, use_container_width=True, hide_index=True)
+                    st.dataframe(reduction_data, width="stretch", hide_index=True)
 
                     # Strategy 2: Sell specific positions
                     st.write("**Opção 2 - Vender posições específicas:**")
@@ -516,7 +542,7 @@ def _render_asset_details(positions, db: Database):
         edited_df = st.data_editor(
             df,
             column_config=column_config,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             key='asset_details_editor'
         )

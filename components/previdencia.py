@@ -4,6 +4,7 @@ Previdencia specialized component with sub-classification
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from database.db import Database
 from utils.calculations import PortfolioCalculator
 
@@ -87,8 +88,33 @@ def _render_overview(positions, db: Database):
 
         df = pd.DataFrame(alloc_data)
 
-        # Display as bar chart
-        st.bar_chart(df.set_index('Sub-Categoria')['Valor'], use_container_width=True)
+        # Display as donut chart
+        total_value = df['Valor'].sum()
+
+        fig = go.Figure(data=[go.Pie(
+            labels=df['Sub-Categoria'],
+            values=df['Valor'],
+            hole=0.40,  # Creates donut effect
+            hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>',
+            textinfo='label+percent',
+            textposition='outside'
+        )])
+
+        fig.update_layout(
+            annotations=[dict(
+                text=f'<b>Total</b><br>R$ {total_value:,.0f}',
+                x=0.5, y=0.5,
+                font_size=16,
+                showarrow=False,
+                align='center'
+            )],
+            showlegend=True,
+            legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05),
+            height=500,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+
+        st.plotly_chart(fig, width="stretch")
 
         # Display as table
         st.dataframe(
@@ -96,7 +122,7 @@ def _render_overview(positions, db: Database):
                 'Valor (Formatado)': 'Valor',
                 'Porcentagem (Formatada)': '%'
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
     else:
@@ -122,7 +148,7 @@ def _render_overview(positions, db: Database):
 
         details_data.append(row)
 
-    st.dataframe(details_data, use_container_width=True, hide_index=True)
+    st.dataframe(details_data, width="stretch", hide_index=True)
 
 
 def _render_sub_classification(positions, db: Database):
@@ -383,7 +409,7 @@ def _render_rebalancing(positions, db: Database, total_value: float):
             'Ajuste Necessário': f"R$ {analysis.rebalance_amount:+,.2f}" if abs(analysis.rebalance_amount) > 1 else "✓"
         })
 
-    st.dataframe(comparison_data, use_container_width=True, hide_index=True)
+    st.dataframe(comparison_data, width="stretch", hide_index=True)
 
     # Display suggestions
     if plan.suggestions:

@@ -86,7 +86,7 @@ def _render_xlsx_upload(db: Database):
                     'Tipo': p.main_category
                 })
 
-            st.dataframe(preview_data, use_container_width=True)
+            st.dataframe(preview_data, width="stretch")
 
             if len(positions) > preview_number:
                 st.info(f"Mostrando {preview_number} de {len(positions)} posições...")
