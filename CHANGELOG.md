@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Google Drive Backup & Restore**: Integrated Google Drive API for database backup and restore functionality:
+  - OAuth 2.0 authentication flow with credential caching (token.pickle)
+  - Manual backup button in sidebar that uploads database with timestamp (format: `investment_data_YYYY-MM-DD_HH-MM-SS.db`)
+  - Backup version management: Multiple timestamped backups stored in "AssetFlow Backups" folder
+  - Restore functionality with dropdown selection of available backups
+  - Automatic safety backup of current database before restore operation
+  - Delete backup functionality to manage storage
+  - Connection status display and disconnect option
+  - Last backup timestamp tracking in session state
+  - Comprehensive setup guide (GOOGLE_DRIVE_SETUP.md) with step-by-step OAuth configuration
+  - Error handling for authentication failures, network issues, and invalid credentials
 - **Emergency Reserve Management for Segurança**: Set a fixed minimum reserve amount for the "Segurança" category. The system automatically calculates excess funds available for rebalancing:
   - Dedicated "🔒 Reserva de Emergência" section in "Classificação de Ativos" tab (separate from target allocations)
   - Simple input to set minimum reserve amount (R$), completely independent from percentage-based targets
@@ -58,6 +69,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **Google Drive Integration**:
+  - New utility module: `utils/gdrive_backup.py` with core functions:
+    - `authenticate_google_drive()`: Handles OAuth flow and credential caching
+    - `upload_backup_to_drive(db_path, credentials)`: Creates timestamped backup in Drive
+    - `list_backups_from_drive(credentials)`: Lists all backups sorted by date
+    - `download_backup_from_drive(file_id, destination_path, credentials)`: Restores backup
+    - `delete_backup_from_drive(file_id, credentials)`: Removes backup from Drive
+    - `format_backup_display_name(backup_info)`: Formats timestamps for UI display
+  - OAuth scope: `https://www.googleapis.com/auth/drive.file` (minimal permissions)
+  - Credentials stored in session state (`st.session_state.gdrive_credentials`)
+  - Added dependencies: `google-api-python-client>=2.151.0`, `google-auth-httplib2>=0.2.0`, `google-auth-oauthlib>=1.2.1`
+  - New sidebar section in `main.py:render_google_drive_section()` (lines 48-178)
+  - Session state variables: `gdrive_credentials`, `last_backup_time`, `confirm_restore`
+  - Safety features: Creates local backup with `.before_restore_TIMESTAMP` suffix before restoring
+  - Custom exception class: `GoogleDriveBackupError` for proper error handling
+  - `.gitignore` updated to exclude `token.pickle` and `credentials.json`
 - **Emergency Reserve Implementation**:
   - Separate "Reserva de Emergência" section created before target allocations (components/classification.py:168-201)
   - Independent form for reserve amount with its own submit button (components/classification.py:178-194)

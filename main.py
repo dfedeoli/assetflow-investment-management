@@ -11,6 +11,15 @@ from components.upload import render_upload_component
 from components.dashboard import render_dashboard_component
 from components.history import render_history_component
 from components.previdencia import render_previdencia_component
+from utils.gdrive_backup import (
+    authenticate_google_drive,
+    upload_backup_to_drive,
+    list_backups_from_drive,
+    download_backup_from_drive,
+    delete_backup_from_drive,
+    format_backup_display_name,
+    GoogleDriveBackupError
+)
 
 
 # Page configuration
@@ -26,6 +35,207 @@ def initialize_session_state():
     """Initialize session state variables"""
     if 'db' not in st.session_state:
         st.session_state.db = Database()
+
+    # Initialize Google Drive credentials in session state
+    if 'gdrive_credentials' not in st.session_state:
+        st.session_state.gdrive_credentials = None
+
+    # Track last backup time
+    if 'last_backup_time' not in st.session_state:
+        st.session_state.last_backup_time = None
+
+    # Track OAuth flow state
+    if 'gdrive_auth_url' not in st.session_state:
+        st.session_state.gdrive_auth_url = None
+
+
+def render_google_drive_section(db: Database):
+    """Render Google Drive backup/restore controls in sidebar"""
+    st.sidebar.subheader("☁️ Google Drive")
+
+    # Check if authenticated
+    is_authenticated = st.session_state.gdrive_credentials is not None
+
+    if not is_authenticated:
+        # Check if we're in the middle of OAuth flow
+        if st.session_state.gdrive_auth_url:
+            # Show the authorization URL and code input
+            st.sidebar.markdown("**🔐 Autenticação Google Drive**")
+            st.sidebar.markdown("**1️⃣ Clique no link abaixo:**")
+
+            # Make the URL clickable using markdown link
+            st.sidebar.markdown(f"[🔗 Autorizar AssetFlow no Google Drive]({st.session_state.gdrive_auth_url})")
+
+            st.sidebar.markdown("**2️⃣ Copie o código da URL**")
+            st.sidebar.caption("Após autorizar, copie tudo que vem depois de 'code=' na URL")
+
+            # Input for authorization code
+            auth_code = st.sidebar.text_input(
+                "**3️⃣ Cole o código aqui:**",
+                placeholder="4/0AbC...XyZ",
+                key="auth_code_input"
+            )
+
+            col1, col2 = st.sidebar.columns(2)
+
+            with col1:
+                if st.button("✅ Confirmar", use_container_width=True):
+                    if auth_code:
+                        try:
+                            with st.spinner("Finalizando autenticação..."):
+                                creds, _ = authenticate_google_drive(auth_code=auth_code.strip())
+                                if creds:
+                                    st.session_state.gdrive_credentials = creds
+                                    st.session_state.gdrive_auth_url = None
+                                    st.success("✅ Conectado ao Google Drive!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Falha ao obter credenciais")
+                        except GoogleDriveBackupError as e:
+                            st.error(f"❌ Erro: {str(e)}")
+                            st.sidebar.caption("Tente novamente ou clique em Cancelar")
+                        except Exception as e:
+                            st.error(f"❌ Erro inesperado: {str(e)}")
+                    else:
+                        st.sidebar.warning("Por favor, cole o código de autorização")
+
+            with col2:
+                if st.button("❌ Cancelar", use_container_width=True):
+                    st.session_state.gdrive_auth_url = None
+                    st.rerun()
+
+        else:
+            # Show initial connect button
+            if st.sidebar.button("🔐 Conectar ao Google Drive", use_container_width=True):
+                try:
+                    # Try to get existing credentials or start OAuth flow
+                    creds, auth_url = authenticate_google_drive()
+
+                    if creds:
+                        # Already have valid credentials
+                        st.session_state.gdrive_credentials = creds
+                        st.success("✅ Conectado ao Google Drive!")
+                        st.rerun()
+                    elif auth_url:
+                        # Need to do OAuth flow
+                        st.session_state.gdrive_auth_url = auth_url
+                        st.rerun()
+
+                except GoogleDriveBackupError as e:
+                    st.error(f"❌ Erro de autenticação: {str(e)}")
+                except Exception as e:
+                    st.error(f"❌ Erro inesperado: {str(e)}")
+
+            # Show help text
+            st.sidebar.caption("Configure primeiro o Google Drive API seguindo GOOGLE_DRIVE_SETUP.md")
+
+    else:
+        # Show backup button
+        if st.sidebar.button("💾 Backup para Drive", use_container_width=True):
+            try:
+                with st.spinner("Fazendo upload do backup..."):
+                    file_id, filename = upload_backup_to_drive(
+                        db.db_path,
+                        st.session_state.gdrive_credentials
+                    )
+                    from datetime import datetime
+                    st.session_state.last_backup_time = datetime.now()
+                    st.success(f"✅ Backup criado: {filename}")
+            except GoogleDriveBackupError as e:
+                st.error(f"❌ Erro no backup: {str(e)}")
+            except Exception as e:
+                st.error(f"❌ Erro inesperado: {str(e)}")
+
+        # Show restore functionality
+        st.sidebar.markdown("**📥 Restaurar Backup**")
+
+        try:
+            backups = list_backups_from_drive(st.session_state.gdrive_credentials)
+
+            if backups:
+                # Create dropdown with backup options
+                backup_options = {format_backup_display_name(b): b['id'] for b in backups}
+                selected_backup_name = st.sidebar.selectbox(
+                    "Escolha um backup:",
+                    options=list(backup_options.keys()),
+                    label_visibility="collapsed"
+                )
+
+                col1, col2 = st.sidebar.columns(2)
+
+                with col1:
+                    if st.button("📥 Restaurar", use_container_width=True):
+                        selected_id = backup_options[selected_backup_name]
+
+                        # Confirm restoration
+                        if 'confirm_restore' not in st.session_state:
+                            st.session_state.confirm_restore = False
+
+                        st.session_state.confirm_restore = True
+
+                        if st.session_state.confirm_restore:
+                            try:
+                                with st.spinner("Restaurando backup..."):
+                                    safety_backup = download_backup_from_drive(
+                                        selected_id,
+                                        db.db_path,
+                                        st.session_state.gdrive_credentials
+                                    )
+
+                                    # Reinitialize database connection
+                                    st.session_state.db = Database(db.db_path)
+
+                                    st.success(f"✅ Backup restaurado com sucesso!")
+                                    if safety_backup:
+                                        st.info(f"💾 Backup de segurança salvo em: {safety_backup}")
+
+                                    st.session_state.confirm_restore = False
+                                    st.rerun()
+
+                            except GoogleDriveBackupError as e:
+                                st.error(f"❌ Erro ao restaurar: {str(e)}")
+                                st.session_state.confirm_restore = False
+                            except Exception as e:
+                                st.error(f"❌ Erro inesperado: {str(e)}")
+                                st.session_state.confirm_restore = False
+
+                with col2:
+                    if st.button("🗑️ Deletar", use_container_width=True):
+                        selected_id = backup_options[selected_backup_name]
+
+                        try:
+                            with st.spinner("Deletando backup..."):
+                                delete_backup_from_drive(
+                                    selected_id,
+                                    st.session_state.gdrive_credentials
+                                )
+                                st.success("✅ Backup deletado!")
+                                st.rerun()
+
+                        except GoogleDriveBackupError as e:
+                            st.error(f"❌ Erro ao deletar: {str(e)}")
+                        except Exception as e:
+                            st.error(f"❌ Erro inesperado: {str(e)}")
+
+            else:
+                st.sidebar.caption("Nenhum backup encontrado no Google Drive")
+
+        except GoogleDriveBackupError as e:
+            st.sidebar.error(f"❌ Erro ao listar backups: {str(e)}")
+        except Exception as e:
+            st.sidebar.error(f"❌ Erro inesperado: {str(e)}")
+
+        # Show last backup time if available
+        if st.session_state.last_backup_time:
+            from datetime import datetime
+            time_str = st.session_state.last_backup_time.strftime('%d/%m/%Y %H:%M:%S')
+            st.sidebar.caption(f"Último backup: {time_str}")
+
+        # Disconnect button
+        if st.sidebar.button("🔓 Desconectar", use_container_width=True):
+            st.session_state.gdrive_credentials = None
+            st.session_state.last_backup_time = None
+            st.rerun()
 
 
 def render_sidebar():
@@ -65,6 +275,11 @@ def render_sidebar():
     if dates:
         latest_date = dates[0]
         st.sidebar.info(f"📅 Última atualização:\n{latest_date.strftime('%d/%m/%Y')}")
+
+    st.sidebar.markdown("---")
+
+    # Google Drive Backup/Restore Section
+    render_google_drive_section(db)
 
     return page
 

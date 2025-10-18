@@ -13,8 +13,10 @@ env/
 
 # Database - contains sensitive investment data
 *.db
+*.db.*
 *.sqlite
 *.sqlite3
+*.before_restore_*
 
 # Data files - contains sensitive financial information
 *.xlsx
@@ -27,6 +29,7 @@ env/
 *.key
 *.pem
 credentials.json
+token.pickle
 
 # Streamlit cache
 .streamlit/
