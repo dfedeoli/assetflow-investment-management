@@ -8,7 +8,6 @@ and generating rebalancing recommendations.
 import streamlit as st
 from database.db import Database
 from components.upload import render_upload_component
-from components.classification import render_classification_component
 from components.dashboard import render_dashboard_component
 from components.history import render_history_component
 from components.previdencia import render_previdencia_component
