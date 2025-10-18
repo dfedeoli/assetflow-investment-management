@@ -275,17 +275,17 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     if seguranca_info:
         if seguranca_info['type'] == 'excess':
             st.success(
-                f"✅ **Segurança acima da reserva mínima**\n\n"
-                f"Atual: R$ {seguranca_info['current']:,.2f} | "
-                f"Reserva: R$ {seguranca_info['reserve']:,.2f} | "
-                f"**Disponível: R$ {seguranca_info['excess']:,.2f}**"
+                f"✅ **Segurança acima da reserva mínima** "
+                f"(Atual: R\$ {seguranca_info['current']:,.2f} \| "
+                f"Reserva: R\$ {seguranca_info['reserve']:,.2f}) \n\n "
+                f"**Disponível: R\$ {seguranca_info['excess']:,.2f}**"
             )
         elif seguranca_info['type'] == 'below':
             st.warning(
-                f"⚠️ **Segurança abaixo do mínimo!**\n\n"
-                f"Atual: R$ {seguranca_info['current']:,.2f} | "
-                f"Reserva: R$ {seguranca_info['reserve']:,.2f} | "
-                f"**Faltam: R$ {seguranca_info['deficit']:,.2f}**"
+                f"⚠️ **Segurança abaixo do mínimo!** "
+                f"(Atual: R\$ {seguranca_info['current']:,.2f} \| "
+                f"Reserva: R\$ {seguranca_info['reserve']:,.2f}) \n\n "
+                f"**Faltam: R\$ {seguranca_info['deficit']:,.2f}**"
             )
         else:
             st.info(
