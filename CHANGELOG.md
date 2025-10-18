@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **XLSX Import Review & Edit**: Users can now review and edit uploaded XLSX files before saving to the database:
+  - New two-stage workflow: Upload → Preview → Edit → Confirm → Save
+  - Editable interface showing all parsed positions with current values
+  - Modify individual position values with inline number inputs
+  - Remove unwanted positions with delete buttons
+  - Add new positions that might be missing from the XLSX file
+  - Real-time summary showing total positions, value, and changes
+  - Visual change indicators (Δ%) for modified values
+  - Cancel option to discard all changes and start over
+  - Maintains all metadata (date, account, categories) from original file
 - **Google Drive Backup & Restore**: Integrated Google Drive API for database backup and restore functionality:
   - OAuth 2.0 authentication flow with credential caching (token.pickle)
   - Manual backup button in sidebar that uploads database with timestamp (format: `investment_data_YYYY-MM-DD_HH-MM-SS.db`)
@@ -69,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **XLSX Import Review Implementation**:
+  - Session state variables for XLSX editing: `xlsx_positions`, `xlsx_metadata`, `xlsx_positions_to_remove`, `xlsx_new_positions`, `xlsx_original_values` (components/upload.py:33-38)
+  - Two-stage rendering: `_render_xlsx_upload()` handles upload/preview, `_render_xlsx_editing()` handles editing stage (components/upload.py:28-121)
+  - Editable interface with 5-column layout: Asset name, Original value, New value, Change %, Remove button (components/upload.py:156-189)
+  - Form-based new position entry matching manual entry workflow (components/upload.py:195-223)
+  - Final summary function `_render_xlsx_final_summary_and_save()` handles duplicate detection and save logic (components/upload.py:245-302)
+  - State cleanup function `_clear_xlsx_editing_state()` resets all session variables after save/cancel (components/upload.py:305-311)
+  - Updated `_import_positions()` to handle optional `percentage` and `quantity` attributes using `hasattr()` (components/upload.py:314-333)
+  - Maintains consistency with existing InvestmentPosition model from parser
 - **Google Drive Integration**:
   - New utility module: `utils/gdrive_backup.py` with core functions:
     - `authenticate_google_drive()`: Handles OAuth flow and credential caching
