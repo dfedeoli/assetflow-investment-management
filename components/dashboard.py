@@ -19,11 +19,11 @@ def render_dashboard_component(db: Database):
         st.info("📭 Nenhuma posição encontrada. Importe seus dados primeiro!")
         return
 
-    # Get targets to filter positions
+    # Get targets to filter positions (exclude labels with 0% target)
     targets = db.get_all_targets()
-    target_labels = set(t.custom_label for t in targets) if targets else set()
+    target_labels = set(t.custom_label for t in targets if t.target_percentage > 0) if targets else set()
 
-    # Filter positions: only include those with custom labels that have targets
+    # Filter positions: only include those with custom labels that have targets > 0%
     positions = [p for p in all_positions if p.custom_label in target_labels]
     excluded_positions = [p for p in all_positions if p.custom_label not in target_labels]
 
@@ -90,7 +90,8 @@ def render_dashboard_component(db: Database):
         _render_rebalancing(positions, db, total_value)
 
     with tab3:
-        _render_asset_details(positions)
+        # Show all positions in asset details, not just managed ones
+        _render_asset_details(all_positions)
 
 
 def _render_overview(positions, db: Database):
@@ -178,8 +179,8 @@ def _render_rebalancing(positions, db: Database, total_value: float):
     calc = PortfolioCalculator()
     current_allocation = calc.calculate_current_allocation(positions, use_custom_labels=True)
 
-    # Get target allocations
-    target_allocations = {t.custom_label: t.target_percentage for t in targets}
+    # Get target allocations (exclude 0% targets)
+    target_allocations = {t.custom_label: t.target_percentage for t in targets if t.target_percentage > 0}
 
     # Input for additional investment
     st.write("**Novo Investimento**")
@@ -424,23 +425,24 @@ def _render_asset_details(positions):
     """Render detailed asset list"""
     st.subheader("Detalhes por Ativo")
 
-    # Filters
-    col1, col2, col3 = st.columns(3)
+    # Filters in collapsible expander
+    with st.expander("🔍 Filtros", expanded=False):
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        main_categories = sorted(set(p.main_category for p in positions))
-        selected_main = st.multiselect("Categoria Principal", main_categories, default=main_categories)
+        with col1:
+            main_categories = sorted(set(p.main_category for p in positions))
+            selected_main = st.multiselect("Categoria Principal", main_categories, default=main_categories)
 
-    with col2:
-        sub_categories = sorted(set(p.sub_category for p in positions))
-        selected_sub = st.multiselect("Subcategoria", sub_categories, default=sub_categories)
+        with col2:
+            sub_categories = sorted(set(p.sub_category for p in positions))
+            selected_sub = st.multiselect("Subcategoria", sub_categories, default=sub_categories)
 
-    with col3:
-        custom_labels = sorted(set(p.custom_label for p in positions if p.custom_label))
-        if custom_labels:
-            selected_custom = st.multiselect("Categoria Personalizada", custom_labels, default=custom_labels)
-        else:
-            selected_custom = []
+        with col3:
+            custom_labels = sorted(set(p.custom_label for p in positions if p.custom_label))
+            if custom_labels:
+                selected_custom = st.multiselect("Categoria Personalizada", custom_labels, default=custom_labels)
+            else:
+                selected_custom = []
 
     # Filter positions
     filtered_positions = [
@@ -450,7 +452,7 @@ def _render_asset_details(positions):
         and (not custom_labels or not selected_custom or p.custom_label in selected_custom)
     ]
 
-    # Sort options
+    # Sort options (kept visible outside expander)
     sort_by = st.selectbox("Ordenar por", ["Valor (Maior)", "Valor (Menor)", "Nome"])
 
     if sort_by == "Valor (Maior)":
