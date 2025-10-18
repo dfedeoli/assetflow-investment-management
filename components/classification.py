@@ -165,9 +165,48 @@ def _render_target_management(db: Database):
     """Render interface to manage target allocations"""
     st.subheader("Metas de Alocação")
 
+    # Emergency Reserve Section (Separate from targets)
+    st.markdown("### 🔒 Reserva de Emergência")
+    st.info(
+        "A categoria **Segurança** é sua reserva de emergência. Defina um valor mínimo "
+        "e qualquer excesso será automaticamente disponibilizado para rebalanceamento."
+    )
+
+    seguranca_target = db.get_target("Segurança")
+    current_reserve = seguranca_target.reserve_amount if seguranca_target and seguranca_target.reserve_amount else 0.0
+
+    with st.form("reserve_form"):
+        reserve_amount = st.number_input(
+            "Valor Mínimo de Reserva de Segurança (R$)",
+            min_value=0.0,
+            value=current_reserve,
+            step=1000.0,
+            help="Valor mínimo a manter sempre na categoria Segurança. O excesso será disponibilizado para rebalanceamento nas outras categorias."
+        )
+
+        reserve_submitted = st.form_submit_button("💾 Salvar Reserva de Emergência", type="primary")
+
+        if reserve_submitted:
+            # Save with 0% target so it doesn't appear in dashboard
+            reserve_amt = reserve_amount if reserve_amount > 0 else None
+            db.add_or_update_target("Segurança", 0.0, reserve_amt)
+            st.success("✓ Reserva de emergência salva com sucesso!")
+            st.rerun()
+
+    # Show current reserve
+    if current_reserve > 0:
+        st.success(f"✅ Reserva atual configurada: **R$ {current_reserve:,.2f}**")
+    else:
+        st.info("ℹ️ Nenhuma reserva de emergência configurada.")
+
+    st.divider()
+
+    # Target Allocations Section
+    st.markdown("### 📊 Alocação das Demais Categorias")
+
     st.info(
         "⚠️ **Importante:** Apenas categorias com metas definidas aparecerão no Dashboard. "
-        "Categorias sem meta (0%) serão excluídas da análise."
+        "A categoria Segurança não deve ter meta percentual."
     )
 
     st.markdown("""
@@ -175,17 +214,17 @@ def _render_target_management(db: Database):
     O sistema irá comparar sua posição atual com as metas e sugerir rebalanceamentos.
     """)
 
-    # Get all custom labels from mappings
+    # Get all custom labels from mappings (excluding Segurança)
     mappings = db.get_all_mappings()
-    all_labels = sorted(set(m.custom_label for m in mappings))
+    all_labels = sorted(set(m.custom_label for m in mappings if m.custom_label != "Segurança"))
 
     if not all_labels:
         st.warning("⚠️ Classifique seus ativos primeiro antes de definir metas.")
         return
 
-    # Get existing targets
+    # Get existing targets (excluding Segurança)
     existing_targets = db.get_all_targets()
-    targets_dict = {t.custom_label: t.target_percentage for t in existing_targets}
+    targets_dict = {t.custom_label: t.target_percentage for t in existing_targets if t.custom_label != "Segurança"}
 
     # Form to add/edit targets
     st.subheader("Definir Metas")
@@ -196,7 +235,7 @@ def _render_target_management(db: Database):
         targets_input = {}
         total_percentage = 0
 
-        # Create input for each label
+        # Create input for each label (Segurança already excluded from all_labels)
         for label in all_labels:
             current_target = targets_dict.get(label, 0.0)
             targets_input[label] = st.number_input(
@@ -223,25 +262,20 @@ def _render_target_management(db: Database):
             else:
                 for label, target_pct in targets_input.items():
                     if target_pct > 0:  # Only save non-zero targets
-                        db.add_or_update_target(label, target_pct)
+                        db.add_or_update_target(label, target_pct, None)
 
                 st.success("✓ Metas salvas com sucesso!")
                 st.rerun()
 
-    # Display current targets
+    # Display current targets (excluding Segurança)
     st.divider()
     st.subheader("Metas Atuais")
 
-    if existing_targets:
-        target_data = []
-        for target in sorted(existing_targets, key=lambda x: x.target_percentage, reverse=True):
-            target_data.append({
-                "Categoria": target.custom_label,
-                "Meta (%)": f"{target.target_percentage:.1f}%",
-                "Ações": target.id  # For delete button reference
-            })
+    # Filter out Segurança from display
+    display_targets = [t for t in existing_targets if t.custom_label != "Segurança"]
 
-        for target in existing_targets:
+    if display_targets:
+        for target in display_targets:
             col1, col2, col3 = st.columns([3, 2, 1])
 
             with col1:

@@ -20,13 +20,22 @@ def render_dashboard_component(db: Database):
         st.info("📭 Nenhuma posição encontrada. Importe seus dados primeiro!")
         return
 
-    # Get targets to filter positions (exclude labels with 0% target)
+    # Get targets to filter positions (exclude labels with 0% target, unless they have reserve amount)
     targets = db.get_all_targets()
-    target_labels = set(t.custom_label for t in targets if t.target_percentage > 0) if targets else set()
+    # Include labels with target > 0% OR reserve amount set (for Segurança)
+    target_labels = set(
+        t.custom_label for t in targets
+        if t.target_percentage > 0 # or (t.reserve_amount and t.reserve_amount > 0)
+    ) if targets else set()
+    reserve_label = set(
+        t.custom_label for t in targets
+        if t.reserve_amount and t.reserve_amount > 0
+    ) if targets else set()
 
-    # Filter positions: only include those with custom labels that have targets > 0%
+    # Filter positions: only include those with custom labels that have targets > 0% or reserve
     positions = [p for p in all_positions if p.custom_label in target_labels]
     excluded_positions = [p for p in all_positions if p.custom_label not in target_labels]
+    reserve_positions = [p for p in all_positions if p.custom_label in reserve_label]
 
     # Display date and total
     position_date = all_positions[0].date
@@ -88,7 +97,7 @@ def render_dashboard_component(db: Database):
         _render_overview(positions, db)
 
     with tab2:
-        _render_rebalancing(positions, db, total_value)
+        _render_rebalancing(positions, reserve_positions, db, total_value)
 
     with tab3:
         # Show all positions in asset details, not just managed ones
@@ -185,7 +194,7 @@ def _render_overview(positions, db: Database):
     st.dataframe(sub_data, use_container_width=True, hide_index=True)
 
 
-def _render_rebalancing(positions, db: Database, total_value: float):
+def _render_rebalancing(positions, reserve_positions, db: Database, total_value: float):
     """Render rebalancing analysis"""
     st.subheader("Análise de Rebalanceamento")
 
@@ -204,18 +213,100 @@ def _render_rebalancing(positions, db: Database, total_value: float):
     # Calculate current allocation
     calc = PortfolioCalculator()
     current_allocation = calc.calculate_current_allocation(positions, use_custom_labels=True)
+    reserve_allocation = calc.calculate_current_allocation(reserve_positions, use_custom_labels=True)
 
-    # Get target allocations (exclude 0% targets)
-    target_allocations = {t.custom_label: t.target_percentage for t in targets if t.target_percentage > 0}
+    # Get target allocations (exclude 0% targets and Segurança if it has reserve)
+    target_allocations = {}
+    seguranca_has_reserve = False
+
+    for t in targets:
+        if t.target_percentage > 0:
+            # Skip Segurança if it has a reserve amount (will be handled separately)
+            if t.custom_label == "Segurança" and t.reserve_amount:
+                seguranca_has_reserve = True
+                continue
+            target_allocations[t.custom_label] = t.target_percentage
+
+    # Calculate available funds from Segurança reserve
+    seguranca_info = None
+
+    # Get Segurança target
+    seguranca_target = db.get_target("Segurança")
+    if seguranca_target and seguranca_target.reserve_amount:
+        # Calculate current Segurança value
+        current_seguranca = reserve_allocation.get("Segurança", 0.0)
+        reserve_amount = seguranca_target.reserve_amount
+
+        # Calculate excess
+        excess = current_seguranca - reserve_amount
+
+        if excess > 0:
+            seguranca_info = {
+                'type': 'excess',
+                'current': current_seguranca,
+                'reserve': reserve_amount,
+                'excess': excess
+            }
+        elif excess < 0:
+            seguranca_info = {
+                'type': 'below',
+                'current': current_seguranca,
+                'reserve': reserve_amount,
+                'deficit': abs(excess)
+            }
+        else:
+            seguranca_info = {
+                'type': 'exact',
+                'current': current_seguranca,
+                'reserve': reserve_amount
+            }
+
+    # Calculate default investment value
+    if seguranca_info and seguranca_info['type'] == 'excess':
+        default_investment = seguranca_info['excess']
+    else:
+        default_investment = 0.0
+
+    # Store in session state to trigger UI update
+    if 'seguranca_excess' not in st.session_state or st.session_state.seguranca_excess != default_investment:
+        st.session_state.seguranca_excess = default_investment
+
+    # Display Segurança reserve info
+    if seguranca_info:
+        if seguranca_info['type'] == 'excess':
+            st.success(
+                f"✅ **Segurança acima da reserva mínima**\n\n"
+                f"Atual: R$ {seguranca_info['current']:,.2f} | "
+                f"Reserva: R$ {seguranca_info['reserve']:,.2f} | "
+                f"**Disponível: R$ {seguranca_info['excess']:,.2f}**"
+            )
+        elif seguranca_info['type'] == 'below':
+            st.warning(
+                f"⚠️ **Segurança abaixo do mínimo!**\n\n"
+                f"Atual: R$ {seguranca_info['current']:,.2f} | "
+                f"Reserva: R$ {seguranca_info['reserve']:,.2f} | "
+                f"**Faltam: R$ {seguranca_info['deficit']:,.2f}**"
+            )
+        else:
+            st.info(
+                f"ℹ️ **Segurança exatamente na reserva**\n\n"
+                f"Valor: R$ {seguranca_info['current']:,.2f}"
+            )
 
     # Input for additional investment
     st.write("**Novo Investimento**")
+
+    help_text = "Deixe em 0 para ver apenas o status atual"
+    if seguranca_info and seguranca_info['type'] == 'excess':
+        help_text = f"Valor padrão: R$ {st.session_state.seguranca_excess:,.2f} disponível do excesso de Segurança"
+
     additional_investment = st.number_input(
         "Valor adicional a investir (R$)",
         min_value=0.0,
-        value=0.0,
+        value=st.session_state.seguranca_excess,
         step=1000.0,
-        help="Deixe em 0 para ver apenas o status atual"
+        help=help_text,
+        key="additional_investment_input"
     )
 
     # Create rebalancing plan
@@ -230,6 +321,11 @@ def _render_rebalancing(positions, db: Database, total_value: float):
     st.write("**Alocação Atual vs Meta**")
 
     comparison_data = []
+
+    # Don't add Segurança to the table - it's only used for calculating available funds
+    # The reserve status is already shown above in the status messages
+
+    # Add all categories from the plan
     for analysis in plan.analyses:
         status_emoji = {
             'balanced': '✅',

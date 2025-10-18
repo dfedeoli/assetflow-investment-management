@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Emergency Reserve Management for Segurança**: Set a fixed minimum reserve amount for the "Segurança" category. The system automatically calculates excess funds available for rebalancing:
+  - Dedicated "🔒 Reserva de Emergência" section in "Classificação de Ativos" tab (separate from target allocations)
+  - Simple input to set minimum reserve amount (R$), completely independent from percentage-based targets
+  - Automatic calculation of available funds: Current Segurança value - Reserve amount = Available to invest
+  - Pre-filled default value in "Valor adicional a investir" input based on calculated excess (uses session_state for proper updates)
+  - Smart status indicators in Dashboard Rebalanceamento tab:
+    - ✅ Green success message when Segurança is above minimum (shows excess available)
+    - ⚠️ Warning when Segurança is below minimum (shows deficit, sets available to R$ 0)
+    - ℹ️ Info message when exactly at reserve amount
+  - Segurança completely excluded from target allocation form and validation (not part of 100% calculation)
+  - Segurança used ONLY to calculate excess funds for default "Novo Investimento" value
+  - Segurança does NOT appear in "Alocação Atual vs Meta" table or rebalancing suggestions
+  - Segurança does NOT appear in Dashboard overview (reserve-only mode, completely separate from portfolio analysis)
 - **Default Custom Labels**: "Previdência" (retirement funds) and "Segurança" (safety reserve) custom labels are now automatically created when initializing a new database, ensuring all users start with these essential categories available
 - **Edit Existing Positions**: "Atualizar Posições" tab now supports editing positions on the same date to fix incorrect values. New "✏️ Editar na mesma data" checkbox allows users to choose between editing existing data or creating a new snapshot
 - **Inline Editing for Invested Values**: Dashboard "Detalhes por Ativo" tab now allows inline editing of "Investido" (invested_value) column. Click any cell to correct wrong values, and "Ganho" (gain/loss) automatically recalculates. Changes are saved with a single button click
@@ -45,6 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **Emergency Reserve Implementation**:
+  - Separate "Reserva de Emergência" section created before target allocations (components/classification.py:168-201)
+  - Independent form for reserve amount with its own submit button (components/classification.py:178-194)
+  - Reserve saved with 0% target to exclude from dashboard analysis (components/classification.py:192)
+  - Segurança filtered from `all_labels` list using list comprehension (components/classification.py:219)
+  - Segurança excluded from existing_targets display (components/classification.py:275-291)
+  - Target percentage validation no longer includes Segurança (not part of 100% sum)
+  - Position filtering includes labels with `reserve_amount > 0` even if target is 0% (components/dashboard.py:26-29)
+  - This ensures Segurança positions are included in calculations despite having 0% target
+  - Dashboard calculates available funds: `excess = current_seguranca - reserve_amount` (components/dashboard.py:231)
+  - Three info states tracked: 'excess' (above reserve), 'below' (deficit), 'exact' (at reserve) (components/dashboard.py:233-252)
+  - Default investment calculated and stored in `st.session_state.seguranca_excess` (components/dashboard.py:254-262)
+  - Session state ensures input value updates when reserve changes (components/dashboard.py:296)
+  - Status messages display before "Novo Investimento" section with appropriate styling (components/dashboard.py:265-284)
+  - Segurança filtered from target_allocations when reserve_amount is set (components/dashboard.py:208-218)
+  - Segurança excluded from comparison table display - only status message shown (components/dashboard.py:319-322)
+  - Rebalancing plan calculations don't include Segurança at all (uses filtered target_allocations)
+  - Existing `target_allocations.reserve_amount` column in database used (database/db.py:65, database/models.py:60)
 - Added `plotly` dependency (version 6.3.1) for interactive visualizations
 - Replaced `st.bar_chart` with `plotly.graph_objects.Pie` (hole=0.45) for donut charts
 - Donut charts implemented in Dashboard (components/dashboard.py:129-155) and Previdência (components/previdencia.py:91-117)

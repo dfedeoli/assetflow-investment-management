@@ -41,3 +41,5 @@ credentials.json
 # OS
 .DS_Store
 Thumbs.db
+
+todo.md
