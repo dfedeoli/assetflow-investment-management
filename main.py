@@ -37,7 +37,7 @@ def render_sidebar():
     # Navigation
     page = st.sidebar.radio(
         "Navegação",
-        ["📊 Dashboard", "📁 Importar Dados", "🏷️ Classificação", "💼 Previdência", "📈 Histórico"],
+        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "📁 Importar Dados"],
         label_visibility="collapsed"
     )
 
@@ -84,16 +84,14 @@ def render_home():
     - Adicione posições manualmente
     - Suporte para formatos complexos com múltiplas categorias
 
-    ### 🏷️ Classificação
-    - Crie categorias personalizadas de investimento
-    - Mapeie ativos para suas categorias
-    - Defina metas de alocação
-
-    ### 📊 Dashboard
+    ### 📊 Carteira de Investimento
     - Visualize sua alocação atual
     - Compare com suas metas
     - Receba sugestões de rebalanceamento
     - Calcule onde investir novo dinheiro
+    - Crie categorias personalizadas de investimento
+    - Mapeie ativos para suas categorias
+    - Defina metas de alocação
 
     ### 📈 Histórico
     - Acompanhe a evolução do patrimônio
@@ -104,9 +102,9 @@ def render_home():
 
     **Para começar:**
     1. Importe suas posições na aba "Importar Dados"
-    2. Classifique seus ativos na aba "Classificação"
+    2. Classifique seus ativos na aba "Carteira de Investimentos"
     3. Defina suas metas de alocação
-    4. Visualize análises e recomendações no Dashboard
+    4. Visualize análises e recomendações no Carteira de Investimento
     """)
 
     # Quick start guide
@@ -148,11 +146,11 @@ def render_home():
     if stats['total_positions'] == 0:
         st.info("👉 **Próximo passo:** Vá para 'Importar Dados' para adicionar suas posições.")
     elif stats['unmapped_assets'] > 0:
-        st.info("👉 **Próximo passo:** Vá para 'Classificação' para classificar seus ativos.")
+        st.info("👉 **Próximo passo:** Vá para 'Carteira de Investimentos' para classificar seus ativos.")
     elif stats['total_targets'] == 0:
-        st.info("👉 **Próximo passo:** Vá para 'Classificação' e defina suas metas de alocação.")
+        st.info("👉 **Próximo passo:** Vá para 'Carteira de Investimentos' e defina suas metas de alocação.")
     else:
-        st.success("👍 **Tudo pronto!** Explore o Dashboard e o Histórico.")
+        st.success("👍 **Tudo pronto!** Explore o Carteira de Investimento e o Histórico.")
 
 
 def main():
@@ -165,12 +163,10 @@ def main():
     # Render selected page
     db = st.session_state.db
 
-    if page == "📊 Dashboard":
+    if page == "📊 Carteira de Investimento":
         render_dashboard_component(db)
     elif page == "📁 Importar Dados":
         render_upload_component(db)
-    elif page == "🏷️ Classificação":
-        render_classification_component(db)
     elif page == "💼 Previdência":
         render_previdencia_component(db)
     elif page == "📈 Histórico":

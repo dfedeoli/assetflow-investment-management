@@ -76,7 +76,7 @@ The application follows a modular architecture with clear separation of concerns
 1. **Import**: XLSX files or manual entries → Parser → Database (positions table)
 2. **Classification**: User maps assets to custom labels → Database (asset_mappings table)
 3. **Targets**: User defines target allocations → Database (target_allocations table)
-4. **Analysis**: Positions + Mappings + Targets → PortfolioCalculator → Dashboard visualization
+4. **Analysis**: Positions + Mappings + Targets → PortfolioCalculator → Carteira de Investimento visualization
 
 ### Key Components
 
@@ -199,7 +199,7 @@ The application follows a modular architecture with clear separation of concerns
 
 ### Classification System
 - Custom labels must be defined before setting targets
-- **Dashboard filtering**: Only positions with defined targets appear in the main Dashboard
+- **Carteira de Investimento filtering**: Only positions with defined targets appear in the main Carteira de Investimento
 - Unmapped assets show as "Não Classificado" in analysis
 - **Sub-labels**: Hierarchical classification within parent categories (e.g., Previdência → Conservadora/Moderada)
 - Sub-label targets are percentages within the parent category (not the total portfolio)

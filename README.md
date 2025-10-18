@@ -42,7 +42,7 @@ A comprehensive Streamlit application for managing and analyzing your investment
    - Go to "Importar Dados" and upload your first XLSX file or add positions manually
    - Go to "Classificação" to categorize your assets
    - Define your target allocations in the "Definir Metas" tab
-   - View analysis in the "Dashboard"
+   - View analysis in the "Carteira de Investimento"
 
 ## Project Structure
 

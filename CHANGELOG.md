@@ -13,17 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Simple input to set minimum reserve amount (R$), completely independent from percentage-based targets
   - Automatic calculation of available funds: Current Segurança value - Reserve amount = Available to invest
   - Pre-filled default value in "Valor adicional a investir" input based on calculated excess (uses session_state for proper updates)
-  - Smart status indicators in Dashboard Rebalanceamento tab:
+  - Smart status indicators in Carteira de Investimento Rebalanceamento tab:
     - ✅ Green success message when Segurança is above minimum (shows excess available)
     - ⚠️ Warning when Segurança is below minimum (shows deficit, sets available to R$ 0)
     - ℹ️ Info message when exactly at reserve amount
   - Segurança completely excluded from target allocation form and validation (not part of 100% calculation)
   - Segurança used ONLY to calculate excess funds for default "Novo Investimento" value
   - Segurança does NOT appear in "Alocação Atual vs Meta" table or rebalancing suggestions
-  - Segurança does NOT appear in Dashboard overview (reserve-only mode, completely separate from portfolio analysis)
+  - Segurança does NOT appear in Carteira de Investimento overview (reserve-only mode, completely separate from portfolio analysis)
 - **Default Custom Labels**: "Previdência" (retirement funds) and "Segurança" (safety reserve) custom labels are now automatically created when initializing a new database, ensuring all users start with these essential categories available
 - **Edit Existing Positions**: "Atualizar Posições" tab now supports editing positions on the same date to fix incorrect values. New "✏️ Editar na mesma data" checkbox allows users to choose between editing existing data or creating a new snapshot
-- **Inline Editing for Invested Values**: Dashboard "Detalhes por Ativo" tab now allows inline editing of "Investido" (invested_value) column. Click any cell to correct wrong values, and "Ganho" (gain/loss) automatically recalculates. Changes are saved with a single button click
+- **Inline Editing for Invested Values**: Carteira de Investimento "Detalhes por Ativo" tab now allows inline editing of "Investido" (invested_value) column. Click any cell to correct wrong values, and "Ganho" (gain/loss) automatically recalculates. Changes are saved with a single button click
 - **Update Positions Feature**: New "Atualizar Posições" tab in the upload component that allows users to:
   - Load positions from a previous date as a starting point
   - Edit individual position values
@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preserve custom labels and classifications when updating
   - Handle duplicate date detection with options to delete or merge
 - Session state management for tracking original values to prevent UI updates from affecting displayed original values
-- **Asset-Level Rebalancing Details**: Granular breakdown in Dashboard "Rebalanceamento" tab showing:
+- **Asset-Level Rebalancing Details**: Granular breakdown in Carteira de Investimento "Rebalanceamento" tab showing:
   - Individual assets within each category with current values and percentages
   - Specific investment recommendations for each asset when categories are underweight
   - Multiple allocation strategies:
@@ -50,11 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Interactive hover tooltips showing values and percentages
   - Total portfolio value displayed in the center of the donut
   - Clear visual representation of allocation distribution
-  - Applied to both Dashboard and Previdência components
-- **Dashboard Filtering**: Labels with 0% target allocation are now excluded from "Visão Geral" and "Rebalanceamento" tabs, but all assets remain visible in "Detalhes por Ativo" tab. This allows users to have custom labels (like Previdência and Segurança) that don't participate in active portfolio management but can still be tracked
+  - Applied to both Carteira de Investimento and Previdência components
+- **Carteira de Investimento Filtering**: Labels with 0% target allocation are now excluded from "Visão Geral" and "Rebalanceamento" tabs, but all assets remain visible in "Detalhes por Ativo" tab. This allows users to have custom labels (like Previdência and Segurança) that don't participate in active portfolio management but can still be tracked
 - **Detalhes por Ativo UI**: Filters are now hidden in a collapsible expander (collapsed by default) to reduce visual clutter. Sort dropdown remains visible for easy access
 - Upload component now has three tabs: "Entrada Manual", "Upload XLSX", and "Atualizar Posições"
-- Dashboard "Rebalanceamento" tab now includes detailed asset-level breakdown below category-level analysis
+- Carteira de Investimento "Rebalanceamento" tab now includes detailed asset-level breakdown below category-level analysis
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Target percentage validation no longer includes Segurança (not part of 100% sum)
   - Position filtering includes labels with `reserve_amount > 0` even if target is 0% (components/dashboard.py:26-29)
   - This ensures Segurança positions are included in calculations despite having 0% target
-  - Dashboard calculates available funds: `excess = current_seguranca - reserve_amount` (components/dashboard.py:231)
+  - Carteira de Investimento calculates available funds: `excess = current_seguranca - reserve_amount` (components/dashboard.py:231)
   - Three info states tracked: 'excess' (above reserve), 'below' (deficit), 'exact' (at reserve) (components/dashboard.py:233-252)
   - Default investment calculated and stored in `st.session_state.seguranca_excess` (components/dashboard.py:254-262)
   - Session state ensures input value updates when reserve changes (components/dashboard.py:296)
@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Existing `target_allocations.reserve_amount` column in database used (database/db.py:65, database/models.py:60)
 - Added `plotly` dependency (version 6.3.1) for interactive visualizations
 - Replaced `st.bar_chart` with `plotly.graph_objects.Pie` (hole=0.45) for donut charts
-- Donut charts implemented in Dashboard (components/dashboard.py:129-155) and Previdência (components/previdencia.py:91-117)
+- Donut charts implemented in Carteira de Investimento (components/dashboard.py:129-155) and Previdência (components/previdencia.py:91-117)
 - Chart configuration: 45% hole size, outside label positioning, interactive hover templates, center annotations showing total value
 - Added `_initialize_default_labels()` method in Database class (database/db.py:110-142)
 - Default labels are inserted only if they don't already exist (idempotent operation)

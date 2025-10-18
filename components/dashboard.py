@@ -7,11 +7,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from database.db import Database
 from utils.calculations import PortfolioCalculator
+from components.classification import  _render_mapping_management, _render_target_management
 
 
 def render_dashboard_component(db: Database):
     """Render portfolio dashboard"""
-    st.header("📊 Dashboard do Portfólio")
+    st.header("📊 Carteira de Investimento")
 
     # Get latest positions
     all_positions = db.get_latest_positions()
@@ -91,7 +92,7 @@ def render_dashboard_component(db: Database):
     st.divider()
 
     # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(["Visão Geral", "Rebalanceamento", "Detalhes por Ativo"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Visão Geral", "Rebalanceamento", "Detalhes por Ativo", "Gerenciar Mapeamentos", "Definir Metas"])
 
     with tab1:
         _render_overview(positions, db)
@@ -103,10 +104,16 @@ def render_dashboard_component(db: Database):
         # Show all positions in asset details, not just managed ones
         _render_asset_details(all_positions, db)
 
+    with tab4:
+        _render_mapping_management(db)
+
+    with tab5:
+        _render_target_management(db)
+
 
 def _render_overview(positions, db: Database):
     """Render portfolio overview"""
-    st.subheader("Distribuição do Portfólio")
+    st.subheader("Distribuição")
 
     # Calculate allocations by custom label and sub-category
     calc = PortfolioCalculator()

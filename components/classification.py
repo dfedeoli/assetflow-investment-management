@@ -15,15 +15,12 @@ def render_classification_component(db: Database):
     Isso permite agrupar diferentes ativos por estratégia ou objetivo de investimento.
     """)
 
-    tab1, tab2, tab3 = st.tabs(["Classificar Ativos", "Gerenciar Mapeamentos", "Definir Metas"])
+    tab1, tab2 = st.tabs(["Gerenciar Mapeamentos", "Definir Metas"])
 
     with tab1:
-        _render_asset_classification(db)
-
-    with tab2:
         _render_mapping_management(db)
 
-    with tab3:
+    with tab2:
         _render_target_management(db)
 
 
@@ -107,6 +104,8 @@ def _select_labels_or_create_new(existing_labels):
 
 def _render_mapping_management(db: Database):
     """Render interface to manage existing mappings"""
+    _render_asset_classification(db)
+    st.divider()
     st.subheader("Mapeamentos Existentes")
 
     mappings = db.get_all_mappings()
@@ -163,7 +162,6 @@ def _render_mapping_management(db: Database):
 
 def _render_target_management(db: Database):
     """Render interface to manage target allocations"""
-    st.subheader("Metas de Alocação")
 
     # Emergency Reserve Section (Separate from targets)
     st.markdown("### 🔒 Reserva de Emergência")
@@ -202,11 +200,10 @@ def _render_target_management(db: Database):
     st.divider()
 
     # Target Allocations Section
-    st.markdown("### 📊 Alocação das Demais Categorias")
+    st.markdown("### 📊 Metas de Alocação")
 
     st.info(
-        "⚠️ **Importante:** Apenas categorias com metas definidas aparecerão no Dashboard. "
-        "A categoria Segurança não deve ter meta percentual."
+        "⚠️ **Importante:** Apenas categorias com metas definidas aparecerão no Carteira de Investimento. "
     )
 
     st.markdown("""
@@ -290,21 +287,3 @@ def _render_target_management(db: Database):
                     st.rerun()
     else:
         st.info("Nenhuma meta definida ainda.")
-
-    # Quick preset options
-    st.divider()
-    st.subheader("Presets de Alocação")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button("📊 Conservador (80/20)", help="80% Renda Fixa, 20% Variável"):
-            st.info("Implemente presets conforme necessário")
-
-    with col2:
-        if st.button("⚖️ Moderado (60/40)", help="60% Renda Fixa, 40% Variável"):
-            st.info("Implemente presets conforme necessário")
-
-    with col3:
-        if st.button("🚀 Agressivo (30/70)", help="30% Renda Fixa, 70% Variável"):
-            st.info("Implemente presets conforme necessário")
