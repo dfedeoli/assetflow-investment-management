@@ -13,7 +13,7 @@ def render_upload_component(db: Database):
     """Render the file upload interface"""
     st.header("📁 Importar Posições")
 
-    tab1, tab2, tab3 = st.tabs(["Entrada Manual", "Atualizar Posições", "Upload XLSX"])
+    tab1, tab2, tab3 = st.tabs(["Entrada Manual", "Atualizar Posições", "Upload - Histórico Carteira XP"])
 
     with tab1:
         _render_manual_entry(db)
@@ -27,7 +27,7 @@ def render_upload_component(db: Database):
 
 def _render_xlsx_upload(db: Database):
     """Render XLSX file upload"""
-    st.subheader("Upload de Arquivo XLSX")
+    st.subheader("Upload de Histórico de Carteira - XP Investimentos")
 
     uploaded_file = st.file_uploader(
         "Selecione o arquivo XLSX da sua posição",
