@@ -96,6 +96,7 @@ The application follows a modular architecture with clear separation of concerns
   - `sub_label_targets`: Target percentages for sub-labels within parent category
 - Automatic custom_label application when positions are added
 - Query methods for date-based filtering and historical analysis
+- **Default Labels**: Automatically creates "Previdência" and "Segurança" custom labels on database initialization (with 0% target allocation)
 - **Important**: Uses `sqlite3.Row` - access columns with `row['column']` not `row.get('column')`
 
 **PortfolioCalculator** (utils/calculations.py)

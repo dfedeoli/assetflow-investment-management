@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Default Custom Labels**: "Previdência" (retirement funds) and "Segurança" (safety reserve) custom labels are now automatically created when initializing a new database, ensuring all users start with these essential categories available
 - **Update Positions Feature**: New "Atualizar Posições" tab in the upload component that allows users to:
   - Load positions from a previous date as a starting point
   - Edit individual position values
@@ -30,11 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clear visual status indicators (✅ balanced, 🔴 underweight, ⚠️ overweight)
 
 ### Changed
+- **Dashboard Filtering**: Labels with 0% target allocation are now excluded from "Visão Geral" and "Rebalanceamento" tabs, but all assets remain visible in "Detalhes por Ativo" tab. This allows users to have custom labels (like Previdência and Segurança) that don't participate in active portfolio management but can still be tracked
+- **Detalhes por Ativo UI**: Filters are now hidden in a collapsible expander (collapsed by default) to reduce visual clutter. Sort dropdown remains visible for easy access
 - Upload component now has three tabs: "Entrada Manual", "Upload XLSX", and "Atualizar Posições"
 - Dashboard "Rebalanceamento" tab now includes detailed asset-level breakdown below category-level analysis
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- Added `_initialize_default_labels()` method in Database class (database/db.py:110-142)
+- Default labels are inserted only if they don't already exist (idempotent operation)
+- Labels created with 0% target allocation and no reserve amount (can be customized later)
+- Updated dashboard filtering logic to exclude labels with `target_percentage == 0` (components/dashboard.py:24)
+- Rebalancing analysis now excludes 0% targets from target_allocations dictionary (components/dashboard.py:183)
+- "Detalhes por Ativo" tab now receives `all_positions` to show complete portfolio (components/dashboard.py:94)
+- Filters in "Detalhes por Ativo" wrapped in `st.expander()` for cleaner UI (components/dashboard.py:429)
 - Added `_render_update_positions()` function to handle the update workflow (components/upload.py:193)
 - Added `_save_updated_positions()` helper function for batch saving (components/upload.py:393)
 - Added `_clear_editing_state()` helper function for session state cleanup (components/upload.py:411)
