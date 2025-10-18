@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Default Custom Labels**: "Previdência" (retirement funds) and "Segurança" (safety reserve) custom labels are now automatically created when initializing a new database, ensuring all users start with these essential categories available
+- **Edit Existing Positions**: "Atualizar Posições" tab now supports editing positions on the same date to fix incorrect values. New "✏️ Editar na mesma data" checkbox allows users to choose between editing existing data or creating a new snapshot
+- **Inline Editing for Invested Values**: Dashboard "Detalhes por Ativo" tab now allows inline editing of "Investido" (invested_value) column. Click any cell to correct wrong values, and "Ganho" (gain/loss) automatically recalculates. Changes are saved with a single button click
 - **Update Positions Feature**: New "Atualizar Posições" tab in the upload component that allows users to:
   - Load positions from a previous date as a starting point
   - Edit individual position values
@@ -45,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing analysis now excludes 0% targets from target_allocations dictionary (components/dashboard.py:183)
 - "Detalhes por Ativo" tab now receives `all_positions` to show complete portfolio (components/dashboard.py:94)
 - Filters in "Detalhes por Ativo" wrapped in `st.expander()` for cleaner UI (components/dashboard.py:429)
+- Added `edit_same_date` session state variable to track edit mode (components/upload.py:213)
+- Same-date editing automatically deletes old positions before saving edited ones (components/upload.py:395)
+- Dynamic button labels based on edit mode: "Salvar Alterações" for same date, "Salvar Posições Atualizadas" for new date
+- Added `update_position_invested_value(position_id, invested_value)` method in Database class (database/db.py:241-252)
+- Replaced `st.dataframe` with `st.data_editor` in asset details for inline editing (components/dashboard.py:516-522)
+- Only "Investido (R$)" column is editable; all other columns are read-only for data safety
+- Change detection compares original vs edited DataFrame to show save button only when needed
+- Ganho columns automatically recalculate based on formula: `value - invested_value`
 - Added `_render_update_positions()` function to handle the update workflow (components/upload.py:193)
 - Added `_save_updated_positions()` helper function for batch saving (components/upload.py:393)
 - Added `_clear_editing_state()` helper function for session state cleanup (components/upload.py:411)

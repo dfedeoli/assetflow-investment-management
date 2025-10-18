@@ -91,7 +91,7 @@ def render_dashboard_component(db: Database):
 
     with tab3:
         # Show all positions in asset details, not just managed ones
-        _render_asset_details(all_positions)
+        _render_asset_details(all_positions, db)
 
 
 def _render_overview(positions, db: Database):
@@ -421,8 +421,8 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                     )
 
 
-def _render_asset_details(positions):
-    """Render detailed asset list"""
+def _render_asset_details(positions, db: Database):
+    """Render detailed asset list with inline editing for invested values"""
     st.subheader("Detalhes por Ativo")
 
     # Filters in collapsible expander
@@ -462,13 +462,28 @@ def _render_asset_details(positions):
     else:
         filtered_positions.sort(key=lambda x: x.name)
 
-    # Display table
+    # Display table with editable invested values
     if filtered_positions:
+        # Prepare data for editing
         details_data = []
-        for p in filtered_positions:
+        position_id_map = {}  # Map row index to position ID
+
+        for idx, p in enumerate(filtered_positions):
+            # Store position ID mapping
+            position_id_map[idx] = p.id
+
+            # Calculate gain
+            invested = p.invested_value if p.invested_value else 0.0
+            gain = p.value - invested
+            gain_pct = (gain / invested * 100) if invested > 0 else 0
+
             row = {
+                'ID': p.id,  # Hidden column for tracking
                 'Nome': p.name,
-                'Valor': f"R$ {p.value:,.2f}",
+                'Valor (R$)': p.value,
+                'Investido (R$)': invested,
+                'Ganho (R$)': gain,
+                'Ganho (%)': gain_pct,
                 'Categoria': p.main_category,
                 'Subcategoria': p.sub_category,
             }
@@ -476,15 +491,57 @@ def _render_asset_details(positions):
             if p.custom_label:
                 row['Classificação'] = p.custom_label
 
-            if p.invested_value:
-                gain = p.value - p.invested_value
-                gain_pct = (gain / p.invested_value * 100) if p.invested_value > 0 else 0
-                row['Investido'] = f"R$ {p.invested_value:,.2f}"
-                row['Ganho'] = f"R$ {gain:+,.2f} ({gain_pct:+.1f}%)"
-
             details_data.append(row)
 
-        st.dataframe(details_data, use_container_width=True, hide_index=True)
+        # Create DataFrame for editing
+        import pandas as pd
+        df = pd.DataFrame(details_data)
+
+        # Configure column settings
+        column_config = {
+            'ID': None,  # Hide ID column
+            'Nome': st.column_config.TextColumn('Nome', disabled=True, width='large'),
+            'Valor (R$)': st.column_config.NumberColumn('Valor', format='R$ %.2f', disabled=True),
+            'Investido (R$)': st.column_config.NumberColumn('Investido', format='R$ %.2f', help='Clique para editar'),
+            'Ganho (R$)': st.column_config.NumberColumn('Ganho', format='R$ %+.2f', disabled=True),
+            'Ganho (%)': st.column_config.NumberColumn('Ganho %', format='%+.1f%%', disabled=True),
+            'Categoria': st.column_config.TextColumn('Categoria', disabled=True),
+            'Subcategoria': st.column_config.TextColumn('Subcategoria', disabled=True),
+        }
+
+        if 'Classificação' in df.columns:
+            column_config['Classificação'] = st.column_config.TextColumn('Classificação', disabled=True)
+
+        # Display editable dataframe
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            use_container_width=True,
+            hide_index=True,
+            key='asset_details_editor'
+        )
+
+        # Detect changes and show save button
+        if not edited_df.equals(df):
+            st.info("💡 Você tem alterações não salvas. Clique no botão abaixo para salvar.")
+
+            if st.button("💾 Salvar Alterações no Valor Investido", type="primary"):
+                # Find changed rows
+                changes_made = 0
+                for idx in range(len(df)):
+                    original_invested = df.iloc[idx]['Investido (R$)']
+                    edited_invested = edited_df.iloc[idx]['Investido (R$)']
+
+                    if original_invested != edited_invested:
+                        position_id = position_id_map[idx]
+                        db.update_position_invested_value(position_id, edited_invested)
+                        changes_made += 1
+
+                if changes_made > 0:
+                    st.success(f"✓ {changes_made} posição(ões) atualizada(s) com sucesso!")
+                    st.rerun()
+                else:
+                    st.info("Nenhuma alteração detectada.")
 
         # Summary
         total_filtered = sum(p.value for p in filtered_positions)

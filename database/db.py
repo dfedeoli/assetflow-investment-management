@@ -238,6 +238,19 @@ class Database:
 
         return cursor.rowcount
 
+    def update_position_invested_value(self, position_id: int, invested_value: float) -> bool:
+        """Update the invested_value for a specific position"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            UPDATE positions
+            SET invested_value = ?
+            WHERE id = ?
+        """, (invested_value, position_id))
+
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     # ==================== Asset Mapping Operations ====================
 
     def add_or_update_mapping(self, asset_name: str, custom_label: str) -> int:

@@ -193,7 +193,7 @@ def _render_manual_entry(db: Database):
 def _render_update_positions(db: Database):
     """Render interface to update positions from a previous date"""
     st.subheader("Atualizar Posições Existentes")
-    st.write("Carregue posições de uma data anterior e atualize os valores para uma nova data.")
+    st.write("Carregue posições de uma data anterior e atualize os valores, ou edite posições na mesma data para corrigir valores incorretos.")
 
     # Get all available dates
     available_dates = db.get_all_dates()
@@ -210,6 +210,7 @@ def _render_update_positions(db: Database):
         st.session_state.positions_to_remove = set()
         st.session_state.new_positions = []
         st.session_state.original_values = {}
+        st.session_state.edit_same_date = False
 
     col1, col2 = st.columns(2)
 
@@ -218,22 +219,40 @@ def _render_update_positions(db: Database):
             "Selecionar Data Base",
             options=available_dates,
             format_func=lambda d: d.strftime('%d/%m/%Y'),
-            help="Escolha a data das posições que deseja atualizar"
+            help="Escolha a data das posições que deseja editar/atualizar"
         )
 
     with col2:
-        new_date = st.date_input(
-            "Nova Data",
-            value=datetime.now(),
-            help="Data para salvar as posições atualizadas"
+        # Checkbox to toggle edit mode
+        edit_same_date = st.checkbox(
+            "✏️ Editar na mesma data",
+            value=False,
+            help="Marque para editar valores na mesma data. Desmarque para criar posições em uma nova data."
         )
+
+        # Date input - disabled if editing same date
+        if edit_same_date:
+            st.date_input(
+                "Data de Destino",
+                value=base_date,
+                disabled=True,
+                help="Editando na mesma data da base selecionada"
+            )
+            new_date = base_date
+        else:
+            new_date = st.date_input(
+                "Data de Destino",
+                value=datetime.now(),
+                help="Data para salvar as posições atualizadas"
+            )
 
     if st.button("🔄 Carregar Posições", type="primary"):
         positions = db.get_positions_by_date(base_date)
         if positions:
             st.session_state.editing_positions = positions
             st.session_state.base_date = base_date
-            st.session_state.new_date = datetime.combine(new_date, datetime.min.time())
+            st.session_state.new_date = datetime.combine(new_date, datetime.min.time()) if isinstance(new_date, datetime) else datetime.combine(new_date, datetime.min.time())
+            st.session_state.edit_same_date = edit_same_date
             st.session_state.positions_to_remove = set()
             st.session_state.new_positions = []
             # Store original values when loading positions
@@ -362,30 +381,18 @@ def _render_update_positions(db: Database):
             change = ((final_value - original_value) / original_value * 100) if original_value > 0 else 0
             st.metric("Variação", f"{change:+.2f}%")
 
-        # Check for duplicate date
-        existing_on_new_date = db.get_positions_by_date(st.session_state.new_date)
-        if existing_on_new_date:
-            st.warning(
-                f"⚠️ Já existem {len(existing_on_new_date)} posições para "
-                f"{st.session_state.new_date.strftime('%d/%m/%Y')}. "
-                f"Salvar irá adicionar posições duplicadas ou você pode deletar as existentes primeiro."
+        # Check for duplicate date or handle same-date editing
+        if st.session_state.edit_same_date:
+            # Editing same date - always delete and replace
+            st.info(
+                f"ℹ️ As alterações serão salvas na mesma data ({st.session_state.new_date.strftime('%d/%m/%Y')}). "
+                f"As {len(st.session_state.editing_positions)} posições originais serão substituídas."
             )
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🗑️ Deletar Existentes e Salvar", type="secondary"):
-                    db.delete_positions_by_date(st.session_state.new_date)
-                    _save_updated_positions(db, final_positions, st.session_state.new_date)
-                    _clear_editing_state()
-                    st.rerun()
-            with col2:
-                if st.button("💾 Salvar Mesmo Assim", type="secondary"):
-                    _save_updated_positions(db, final_positions, st.session_state.new_date)
-                    _clear_editing_state()
-                    st.rerun()
-        else:
             col1, col2 = st.columns([1, 4])
             with col1:
-                if st.button("💾 Salvar Posições Atualizadas", type="primary"):
+                if st.button("💾 Salvar Alterações", type="primary"):
+                    # Delete existing positions for this date first
+                    db.delete_positions_by_date(st.session_state.new_date)
                     _save_updated_positions(db, final_positions, st.session_state.new_date)
                     _clear_editing_state()
                     st.rerun()
@@ -393,6 +400,38 @@ def _render_update_positions(db: Database):
                 if st.button("❌ Cancelar", type="secondary"):
                     _clear_editing_state()
                     st.rerun()
+        else:
+            # Creating new date - check for duplicates
+            existing_on_new_date = db.get_positions_by_date(st.session_state.new_date)
+            if existing_on_new_date:
+                st.warning(
+                    f"⚠️ Já existem {len(existing_on_new_date)} posições para "
+                    f"{st.session_state.new_date.strftime('%d/%m/%Y')}. "
+                    f"Salvar irá adicionar posições duplicadas ou você pode deletar as existentes primeiro."
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("🗑️ Deletar Existentes e Salvar", type="secondary"):
+                        db.delete_positions_by_date(st.session_state.new_date)
+                        _save_updated_positions(db, final_positions, st.session_state.new_date)
+                        _clear_editing_state()
+                        st.rerun()
+                with col2:
+                    if st.button("💾 Salvar Mesmo Assim", type="secondary"):
+                        _save_updated_positions(db, final_positions, st.session_state.new_date)
+                        _clear_editing_state()
+                        st.rerun()
+            else:
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    if st.button("💾 Salvar Posições Atualizadas", type="primary"):
+                        _save_updated_positions(db, final_positions, st.session_state.new_date)
+                        _clear_editing_state()
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancelar", type="secondary"):
+                        _clear_editing_state()
+                        st.rerun()
 
 
 def _save_updated_positions(db: Database, positions: list, new_date: datetime):
