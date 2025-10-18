@@ -114,7 +114,7 @@ def _render_overview(positions, db: Database):
             margin=dict(l=20, r=20, t=40, b=20)
         )
 
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
         # Display as table
         st.dataframe(
@@ -122,7 +122,7 @@ def _render_overview(positions, db: Database):
                 'Valor (Formatado)': 'Valor',
                 'Porcentagem (Formatada)': '%'
             }),
-            width="stretch",
+            use_container_width=True,
             hide_index=True
         )
     else:
@@ -148,7 +148,7 @@ def _render_overview(positions, db: Database):
 
         details_data.append(row)
 
-    st.dataframe(details_data, width="stretch", hide_index=True)
+    st.dataframe(details_data, use_container_width=True, hide_index=True)
 
 
 def _render_sub_classification(positions, db: Database):
@@ -409,7 +409,7 @@ def _render_rebalancing(positions, db: Database, total_value: float):
             'Ajuste Necessário': f"R$ {analysis.rebalance_amount:+,.2f}" if abs(analysis.rebalance_amount) > 1 else "✓"
         })
 
-    st.dataframe(comparison_data, width="stretch", hide_index=True)
+    st.dataframe(comparison_data, use_container_width=True, hide_index=True)
 
     # Display suggestions
     if plan.suggestions:
