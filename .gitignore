@@ -45,4 +45,6 @@ token.pickle
 .DS_Store
 Thumbs.db
 
+# Specific Markdown files
 todo.md
+GENAI_OPPORTUNITIES.md
