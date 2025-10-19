@@ -11,6 +11,7 @@ from components.upload import render_upload_component
 from components.dashboard import render_dashboard_component
 from components.history import render_history_component
 from components.previdencia import render_previdencia_component
+from components.contribution_history import render_contribution_history
 from utils.gdrive_backup import (
     authenticate_google_drive,
     upload_backup_to_drive,
@@ -243,10 +244,20 @@ def render_sidebar():
     st.sidebar.title("💰 AssetFlow - Investment Management")
     st.sidebar.markdown("---")
 
+    st.sidebar.subheader("Dashboards")
     # Navigation
     page = st.sidebar.radio(
         "Navegação",
-        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "📁 Importar Dados"],
+        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "💰 Contribuições"],
+        label_visibility="collapsed"
+    )
+
+    st.sidebar.markdown("---")
+
+    # Navigation
+    page = st.sidebar.radio(
+        "Navegação",
+        ["📁 Gerenciar Posições"],
         label_visibility="collapsed"
     )
 
@@ -293,9 +304,11 @@ def render_home():
 
     Este aplicativo ajuda você a gerenciar seu portfólio de investimentos:
 
-    ### 📁 Importar Dados
+    ### 📁 Gerenciar Posições
     - Faça upload de arquivos XLSX da sua corretora
     - Adicione posições manualmente
+    - Atualize posições existentes
+    - Registre contribuições para seus investimentos
     - Suporte para formatos complexos com múltiplas categorias
 
     ### 📊 Carteira de Investimento
@@ -315,7 +328,7 @@ def render_home():
     ---
 
     **Para começar:**
-    1. Importe suas posições na aba "Importar Dados"
+    1. Importe suas posições na aba "Gerenciar Posições"
     2. Classifique seus ativos na aba "Carteira de Investimentos"
     3. Defina suas metas de alocação
     4. Visualize análises e recomendações no Carteira de Investimento
@@ -358,7 +371,7 @@ def render_home():
 
     # Next steps
     if stats['total_positions'] == 0:
-        st.info("👉 **Próximo passo:** Vá para 'Importar Dados' para adicionar suas posições.")
+        st.info("👉 **Próximo passo:** Vá para 'Gerenciar Posições' para adicionar suas posições.")
     elif stats['unmapped_assets'] > 0:
         st.info("👉 **Próximo passo:** Vá para 'Carteira de Investimentos' para classificar seus ativos.")
     elif stats['total_targets'] == 0:
@@ -379,12 +392,14 @@ def main():
 
     if page == "📊 Carteira de Investimento":
         render_dashboard_component(db)
-    elif page == "📁 Importar Dados":
+    elif page == "📁 Gerenciar Posições":
         render_upload_component(db)
     elif page == "💼 Previdência":
         render_previdencia_component(db)
     elif page == "📈 Histórico":
         render_history_component(db)
+    elif page == "💰 Contribuições":
+        render_contribution_history(db)
     else:
         render_home()
 

@@ -42,6 +42,34 @@ class Position:
 
 
 @dataclass
+class Contribution:
+    """Tracks individual contributions to assets over time"""
+    id: Optional[int] = None
+    asset_name: str = ""
+    contribution_amount: float = 0.0
+    contribution_date: datetime = None
+    position_id: Optional[int] = None  # FK to position created for this contribution
+    previous_value: float = 0.0
+    new_total_value: float = 0.0
+    notes: Optional[str] = None
+    created_at: datetime = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            'id': self.id,
+            'asset_name': self.asset_name,
+            'contribution_amount': self.contribution_amount,
+            'contribution_date': self.contribution_date.isoformat() if self.contribution_date else None,
+            'position_id': self.position_id,
+            'previous_value': self.previous_value,
+            'new_total_value': self.new_total_value,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+@dataclass
 class AssetMapping:
     """Maps asset names to custom labels"""
     id: Optional[int] = None

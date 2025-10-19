@@ -11,9 +11,9 @@ from database.models import Position
 
 def render_upload_component(db: Database):
     """Render the file upload interface"""
-    st.header("📁 Importar Posições")
+    st.header("📁 Gerenciar Posições")
 
-    tab1, tab2, tab3 = st.tabs(["Entrada Manual", "Atualizar Posições", "Upload - Histórico Carteira XP"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Entrada Manual", "Atualizar Posições", "Registrar Contribuição", "Upload - Histórico Carteira XP"])
 
     with tab1:
         _render_manual_entry(db)
@@ -22,6 +22,9 @@ def render_upload_component(db: Database):
         _render_update_positions(db)
 
     with tab3:
+        _render_record_contribution(db)
+
+    with tab4:
          _render_xlsx_upload(db)
 
 
@@ -376,6 +379,161 @@ def _render_manual_entry(db: Database):
                 db.add_position(position)
                 st.success(f"✓ Posição '{name}' adicionada com sucesso!")
                 st.rerun()
+
+
+def _render_record_contribution(db: Database):
+    """Render interface to record contributions to existing assets"""
+    st.subheader("💰 Registrar Contribuição")
+    st.write("Registre novas contribuições para ativos existentes. O valor da contribuição será adicionado ao valor atual do ativo.")
+
+    # Get latest positions
+    latest_positions = db.get_latest_positions()
+
+    if not latest_positions:
+        st.info("Nenhuma posição encontrada no banco de dados. Adicione posições primeiro usando 'Entrada Manual' ou 'Upload - Histórico Carteira XP'.")
+        return
+
+    # Get unique custom labels (excluding None)
+    custom_labels = sorted(list(set(
+        pos.custom_label for pos in latest_positions
+        if pos.custom_label is not None
+    )))
+
+    # Initialize session state for contribution recording
+    if 'contribution_preview' not in st.session_state:
+        st.session_state.contribution_preview = None
+
+    st.subheader("Dados da Contribuição")
+
+    # Custom label filter - OUTSIDE form so it triggers reruns
+    selected_label = st.selectbox(
+        "Filtrar por Categoria",
+        options=["Todas as Categorias"] + custom_labels,
+        help="Filtre os ativos por categoria para facilitar a seleção"
+    )
+
+    # Filter positions based on selected custom_label
+    if selected_label == "Todas as Categorias":
+        filtered_positions = latest_positions
+    else:
+        filtered_positions = [pos for pos in latest_positions if pos.custom_label == selected_label]
+
+    # Get unique asset names from filtered positions, sorted alphabetically
+    asset_names = sorted(list(set(pos.name for pos in filtered_positions)))
+
+    if not asset_names:
+        st.warning(f"Nenhum ativo encontrado na categoria '{selected_label}'.")
+        return
+
+    # Now start the form with the already-filtered asset list
+    with st.form("record_contribution_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Asset selection
+            selected_asset = st.selectbox(
+                "Selecione o Ativo",
+                options=asset_names,
+                help="Escolha o ativo ao qual você deseja contribuir"
+            )
+
+            # Contribution amount
+            contribution_amount = st.number_input(
+                "Valor da Contribuição (R$)",
+                min_value=0.0,
+                step=100.0,
+                help="Digite apenas o valor que você está contribuindo agora (não o total)"
+            )
+
+        with col2:
+            # Contribution date
+            contribution_date = st.date_input(
+                "Data da Contribuição",
+                value=datetime.now(),
+                help="Data em que a contribuição foi feita"
+            )
+
+            # Notes
+            notes = st.text_area(
+                "Observações (opcional)",
+                placeholder="Ex: Contribuição anual PGBL para IR 2025",
+                help="Adicione qualquer informação relevante sobre esta contribuição"
+            )
+
+        # Preview section
+        if selected_asset and contribution_amount > 0:
+            st.divider()
+            st.subheader("Prévia da Operação")
+
+            # Find the current position for this asset
+            current_position = next((pos for pos in filtered_positions if pos.name == selected_asset), None)
+
+            if current_position:
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric("Valor Atual", f"R$ {current_position.value:,.2f}")
+                    if current_position.custom_label:
+                        st.caption(f"📊 {current_position.custom_label}")
+
+                with col2:
+                    st.metric("Contribuição", f"+ R$ {contribution_amount:,.2f}")
+                    st.caption(f"📅 {contribution_date.strftime('%d/%m/%Y')}")
+
+                with col3:
+                    new_total = current_position.value + contribution_amount
+                    change_pct = (contribution_amount / current_position.value * 100) if current_position.value > 0 else 0
+                    st.metric("Novo Total", f"R$ {new_total:,.2f}", f"+{change_pct:.1f}%")
+
+                # Show invested value calculation if available
+                if current_position.invested_value:
+                    st.info(
+                        f"💡 **Valor Investido:** R$ {current_position.invested_value:,.2f} → "
+                        f"R$ {current_position.invested_value + contribution_amount:,.2f}"
+                    )
+
+        # Submit button
+        submitted = st.form_submit_button("💾 Registrar Contribuição", type="primary")
+
+        if submitted:
+            if not selected_asset:
+                st.error("Por favor, selecione um ativo.")
+            elif contribution_amount <= 0:
+                st.error("Por favor, digite um valor de contribuição maior que zero.")
+            else:
+                try:
+                    # Record the contribution
+                    contribution_datetime = datetime.combine(contribution_date, datetime.min.time())
+
+                    # Validate date is not before last position
+                    current_position = next((pos for pos in filtered_positions if pos.name == selected_asset), None)
+                    if current_position and contribution_datetime < current_position.date:
+                        st.error(
+                            f"A data da contribuição ({contribution_date.strftime('%d/%m/%Y')}) não pode ser "
+                            f"anterior à última posição registrada ({current_position.date.strftime('%d/%m/%Y')})."
+                        )
+                    else:
+                        contribution_id, position_id = db.add_contribution(
+                            asset_name=selected_asset,
+                            contribution_amount=contribution_amount,
+                            contribution_date=contribution_datetime,
+                            notes=notes if notes else None
+                        )
+
+                        st.success(
+                            f"✓ Contribuição de R$ {contribution_amount:,.2f} registrada com sucesso para '{selected_asset}'!"
+                        )
+                        st.info(f"Nova posição criada para a data {contribution_date.strftime('%d/%m/%Y')}.")
+
+                        # Clear preview and rerun
+                        st.session_state.contribution_preview = None
+                        st.rerun()
+
+                except ValueError as e:
+                    st.error(f"Erro: {str(e)}")
+                except Exception as e:
+                    st.error(f"Erro ao registrar contribuição: {str(e)}")
+                    st.exception(e)
 
 
 def _render_update_positions(db: Database):

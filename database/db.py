@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 
-from .models import Position, AssetMapping, TargetAllocation, SubLabelMapping, SubLabelTarget, AnnualIncomeEntry, PGBLYearSettings
+from .models import Position, AssetMapping, TargetAllocation, SubLabelMapping, SubLabelTarget, AnnualIncomeEntry, PGBLYearSettings, Contribution
 
 
 class Database:
@@ -120,6 +120,22 @@ class Database:
             )
         """)
 
+        # Contributions table for tracking individual contributions over time
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS contributions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_name TEXT NOT NULL,
+                contribution_amount REAL NOT NULL,
+                contribution_date TEXT NOT NULL,
+                position_id INTEGER,
+                previous_value REAL NOT NULL,
+                new_total_value REAL NOT NULL,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (position_id) REFERENCES positions(id)
+            )
+        """)
+
         # Create indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_date ON positions(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_label ON positions(custom_label)")
@@ -130,6 +146,9 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_income_entries_year ON annual_income_entries(year)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_income_entries_year_month ON annual_income_entries(year, month)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_pgbl_year_settings_year ON pgbl_year_settings(year)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contributions_asset ON contributions(asset_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contributions_date ON contributions(contribution_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contributions_position ON contributions(position_id)")
 
         # Initialize default custom labels
         self._initialize_default_labels(cursor)
@@ -775,6 +794,152 @@ class Database:
             notes=row['notes'],
             created_at=datetime.fromisoformat(row['created_at']),
             updated_at=datetime.fromisoformat(row['updated_at'])
+        )
+
+    # ==================== Contribution Operations ====================
+
+    def add_contribution(
+        self,
+        asset_name: str,
+        contribution_amount: float,
+        contribution_date: datetime,
+        notes: Optional[str] = None
+    ) -> Tuple[int, int]:
+        """
+        Record a contribution to an asset and create a new position.
+        Returns (contribution_id, position_id)
+
+        This method:
+        1. Finds the most recent position for the asset
+        2. Calculates new total value (previous + contribution)
+        3. Creates a new position with the updated value
+        4. Records the contribution in the contributions table
+        """
+        cursor = self.conn.cursor()
+
+        # Find most recent position for this asset
+        cursor.execute("""
+            SELECT * FROM positions
+            WHERE name = ?
+            ORDER BY date DESC
+            LIMIT 1
+        """, (asset_name,))
+
+        previous_position_row = cursor.fetchone()
+
+        if not previous_position_row:
+            raise ValueError(f"No previous position found for asset '{asset_name}'. Please create an initial position first.")
+
+        # Convert to Position object
+        previous_position = self._row_to_position(previous_position_row)
+
+        # Calculate new values
+        previous_value = previous_position.value
+        new_total_value = previous_value + contribution_amount
+
+        # Calculate new invested value
+        previous_invested = previous_position.invested_value or previous_value
+        new_invested_value = previous_invested + contribution_amount
+
+        # Create new position with updated values
+        new_position = Position(
+            name=asset_name,
+            value=new_total_value,
+            main_category=previous_position.main_category,
+            sub_category=previous_position.sub_category,
+            custom_label=previous_position.custom_label,
+            sub_label=previous_position.sub_label,
+            date=contribution_date,
+            invested_value=new_invested_value,
+            percentage=previous_position.percentage,
+            quantity=previous_position.quantity,
+            additional_info=previous_position.additional_info
+        )
+
+        # Add the new position
+        position_id = self.add_position(new_position)
+
+        # Record the contribution
+        cursor.execute("""
+            INSERT INTO contributions (
+                asset_name, contribution_amount, contribution_date,
+                position_id, previous_value, new_total_value, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            asset_name,
+            contribution_amount,
+            contribution_date.isoformat(),
+            position_id,
+            previous_value,
+            new_total_value,
+            notes
+        ))
+
+        self.conn.commit()
+        contribution_id = cursor.lastrowid
+
+        return (contribution_id, position_id)
+
+    def get_contributions_by_asset(self, asset_name: str) -> List[Contribution]:
+        """Get all contributions for a specific asset"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM contributions
+            WHERE asset_name = ?
+            ORDER BY contribution_date DESC
+        """, (asset_name,))
+
+        return [self._row_to_contribution(row) for row in cursor.fetchall()]
+
+    def get_contributions_between_dates(
+        self,
+        start_date: datetime,
+        end_date: datetime
+    ) -> List[Contribution]:
+        """Get all contributions between two dates"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM contributions
+            WHERE date(contribution_date) BETWEEN date(?) AND date(?)
+            ORDER BY contribution_date DESC
+        """, (start_date.isoformat(), end_date.isoformat()))
+
+        return [self._row_to_contribution(row) for row in cursor.fetchall()]
+
+    def get_all_contributions(self) -> List[Contribution]:
+        """Get all contributions ordered by date (most recent first)"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM contributions
+            ORDER BY contribution_date DESC, created_at DESC
+        """)
+
+        return [self._row_to_contribution(row) for row in cursor.fetchall()]
+
+    def delete_contribution(self, contribution_id: int) -> bool:
+        """Delete a contribution record (does not delete the associated position)"""
+        cursor = self.conn.cursor()
+
+        cursor.execute("DELETE FROM contributions WHERE id = ?", (contribution_id,))
+        self.conn.commit()
+
+        return cursor.rowcount > 0
+
+    def _row_to_contribution(self, row: sqlite3.Row) -> Contribution:
+        """Convert database row to Contribution object"""
+        return Contribution(
+            id=row['id'],
+            asset_name=row['asset_name'],
+            contribution_amount=row['contribution_amount'],
+            contribution_date=datetime.fromisoformat(row['contribution_date']),
+            position_id=row['position_id'],
+            previous_value=row['previous_value'],
+            new_total_value=row['new_total_value'],
+            notes=row['notes'],
+            created_at=datetime.fromisoformat(row['created_at'])
         )
 
     def close(self):

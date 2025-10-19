@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contribution Tracking System**: Comprehensive system for recording and analyzing investment contributions over time:
+  - New "Registrar Contribuição" tab in Import Data section for recording contributions to existing assets
+  - **Cumulative contribution tracking**: Enter only the new contribution amount, system automatically adds it to the current asset value
+  - **Automatic position creation**: Creates a new position snapshot with updated values (current value + contribution)
+  - **Invested value tracking**: Automatically updates the invested_value field by adding the contribution to previous invested value
+  - **Contribution history database**: New `contributions` table tracks every contribution with:
+    - Asset name, contribution amount, contribution date
+    - Previous value, new total value after contribution
+    - Optional notes field (e.g., "Contribuição anual PGBL para IR 2025")
+    - Link to created position via foreign key
+  - **Contribution History viewer**: New "💰 Contribuições" page in navigation with three analysis tabs:
+    - **All Contributions**: Complete list with filters by asset and date range
+    - **By Asset**: Grouped view showing total contributions, timeline, and gain/loss calculations per asset
+    - **By Period**: Aggregations by month/quarter/year with bar charts and breakdowns
+  - **Smart validation**: Prevents recording contributions dated before the last position
+  - **Preview interface**: Shows "Previous Value → +Contribution → =New Total" before saving
+  - **Category preservation**: Maintains all custom_label and sub_label mappings from previous position
+  - **Migration support**: Idempotent migration script for existing databases (`utils/migrate_contributions.py`)
+  - **Use cases**: Perfect for tracking annual Previdência contributions for tax purposes, regular savings deposits, or any incremental investments
 - **PGBL Tax Planning & Income Tracker**: Comprehensive tax planning tool for maximizing PGBL (Previdência Privada) deductions:
   - New "📊 Planejamento PGBL" tab in Previdência component
   - **Monthly income tracking**: Record all income sources (salary, vacation, bonuses, rental income, etc.) throughout the year
@@ -86,7 +105,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic expansion of categories requiring significant action (>R$ 100 adjustment)
   - Clear visual status indicators (✅ balanced, 🔴 underweight, ⚠️ overweight)
 
+### Fixed
+- **Contribution Registration Filter**: Fixed category filter not updating asset list in real-time. Filter is now outside the form, allowing immediate updates when selecting a category instead of waiting for form submission.
+
 ### Changed
+- **Contribution Registration UI Improvements**: Added custom_label filter to "Registrar Contribuição" tab for easier asset selection:
+  - New "Filtrar por Categoria" dropdown before asset selection
+  - Shows only assets from selected category (e.g., "Previdência" shows only PGBL funds)
+  - Includes "Todas as Categorias" option to view all assets
+  - Significantly improves UX for users with large portfolios (50+ assets)
+  - Reduces errors by grouping assets logically
+- **Page Rename**: "Importar Dados" → "Gerenciar Posições" to better reflect the page's multi-purpose nature (manual entry, position updates, contribution recording, XLSX uploads)
 - **Visualization Improvements**: Replaced bar charts with interactive Plotly donut charts in "Visão Geral" tabs. Donut charts better represent portfolio proportions for rebalancing decisions. Features include:
   - Interactive hover tooltips showing values and percentages
   - Total portfolio value displayed in the center of the donut
@@ -99,6 +128,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **UI Improvements for Contribution Registration**:
+  - Custom label filtering added to `_render_record_contribution()` function (components/upload.py:396-430)
+  - **Critical fix**: Moved category filter OUTSIDE `st.form()` block (line 409) to enable real-time updates
+    - Previously: Filter inside form → changes only applied on submit (Streamlit form behavior)
+    - Now: Filter outside form → changes trigger immediate rerun and asset list update
+  - Extracts unique custom_labels from latest positions, excluding None values
+  - Dropdown with "Todas as Categorias" default option plus all custom labels
+  - Filters `latest_positions` list based on selected label using list comprehension
+  - Asset dropdown populated only with names from filtered positions
+  - Preview and validation sections updated to use `filtered_positions` for consistency
+  - Empty state handling: shows warning and returns early if no assets in selected category
+  - "Dados da Contribuição" header moved outside form for better UX (line 406)
+- **Page Renaming**:
+  - Navigation label updated from "📁 Importar Dados" to "📁 Gerenciar Posições" (main.py:250)
+  - Page routing conditional updated to match new name (main.py:383)
+  - Page header updated in upload component (components/upload.py:14)
+  - Home page documentation updated with new name and expanded feature list (main.py:297-302, 321, 364)
+  - Added bullet points for "Atualize posições existentes" and "Registre contribuições" to home page
+- **Contribution Tracking Implementation**:
+  - New database table: `contributions` with columns for asset_name, contribution_amount, contribution_date, position_id (FK), previous_value, new_total_value, notes, created_at (database/db.py:123-137)
+  - New data model: `Contribution` dataclass with `to_dict()` method (database/models.py:44-69)
+  - Database indexes on asset_name, contribution_date, and position_id for efficient querying (database/db.py:149-151)
+  - Core database method: `add_contribution()` atomically creates both contribution record and new position (database/db.py:801-881):
+    - Finds most recent position for asset via `SELECT * FROM positions WHERE name = ? ORDER BY date DESC LIMIT 1`
+    - Validates asset exists (raises ValueError if not found)
+    - Calculates new values: `new_total_value = previous_value + contribution_amount`
+    - Calculates new invested: `new_invested_value = (previous_invested or previous_value) + contribution_amount`
+    - Creates Position with all attributes copied from previous position (category, labels, etc.)
+    - Inserts contribution record with reference to new position_id
+    - Returns tuple: (contribution_id, position_id)
+  - Query methods: `get_contributions_by_asset()`, `get_contributions_between_dates()`, `get_all_contributions()`, `delete_contribution()` (database/db.py:883-929)
+  - Helper method: `_row_to_contribution()` converts sqlite3.Row to Contribution object (database/db.py:931-943)
+  - New tab in upload component: `_render_record_contribution()` (components/upload.py:384-512):
+    - Fetches latest positions with `db.get_latest_positions()`
+    - Provides dropdown of all unique asset names sorted alphabetically
+    - Form-based input: asset selection, contribution amount, date, optional notes
+    - Live preview showing current value, contribution, and new total with percentage change
+    - Validates contribution date is not before last position date
+    - Displays invested_value calculation if available
+  - New component: `components/contribution_history.py` with three rendering functions:
+    - `_render_all_contributions()`: Filterable table view with summary metrics
+    - `_render_by_asset()`: Expandable asset groups showing timeline and gain/loss
+    - `_render_by_period()`: Aggregations by month/quarter/year with bar charts
+  - Navigation integration: Added "💰 Contribuições" to sidebar radio options (main.py:250)
+  - Page routing: `render_contribution_history(db)` called when "💰 Contribuições" selected (main.py:389-390)
+  - Migration script: `utils/migrate_contributions.py` creates contributions table and indexes (idempotent)
+  - Session state variable: `contribution_preview` for UI state management (components/upload.py:400-401)
 - **PGBL Tax Planning Implementation**:
   - New database tables: `annual_income_entries` and `pgbl_year_settings` (database/db.py:97-132)
   - New data models: `AnnualIncomeEntry` and `PGBLYearSettings` (database/models.py:109-159)
