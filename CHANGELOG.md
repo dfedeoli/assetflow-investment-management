@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Contribution Registration Filter**: Fixed category filter not updating asset list in real-time. Filter is now outside the form, allowing immediate updates when selecting a category instead of waiting for form submission.
 
 ### Changed
+- **Page Reorganization**: Combined history-related pages for better organization:
+  - "💰 Contribuições" page merged into "📈 Histórico" page as a 4th tab
+  - Now 3 dashboard pages instead of 4: Carteira, Previdência, Histórico
+  - Logical grouping: All historical data (portfolio evolution and contributions) in one place
+  - Easier to correlate contributions with portfolio growth over time
 - **Contribution Registration UI Improvements**: Added custom_label filter to "Registrar Contribuição" tab for easier asset selection:
   - New "Filtrar por Categoria" dropdown before asset selection
   - Shows only assets from selected category (e.g., "Previdência" shows only PGBL funds)
@@ -128,6 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **Page Reorganization**:
+  - Added 4th tab "Contribuições" to history component (components/history.py:32, 43-44)
+  - Imported `render_contribution_history` in history.py to embed in new tab (line 10)
+  - Removed "💰 Contribuições" from sidebar navigation radio options (main.py:250)
+  - Removed contribution_history page route from main() function (previously line 391-392)
+  - Removed unused import of render_contribution_history from main.py (previously line 14)
+  - Contribution history now accessed via: Histórico page → Contribuições tab
 - **UI Improvements for Contribution Registration**:
   - Custom label filtering added to `_render_record_contribution()` function (components/upload.py:396-430)
   - **Critical fix**: Moved category filter OUTSIDE `st.form()` block (line 409) to enable real-time updates

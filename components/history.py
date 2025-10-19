@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from database.db import Database
 from utils.calculations import PortfolioCalculator
+from components.contribution_history import render_contribution_history
 
 
 def render_history_component(db: Database):
@@ -28,7 +29,7 @@ def render_history_component(db: Database):
     # Multiple dates available
     st.write(f"**{len(dates)} snapshots disponíveis**")
 
-    tab1, tab2, tab3 = st.tabs(["Timeline", "Comparar Períodos", "Evolução por Categoria"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Timeline", "Comparar Períodos", "Evolução por Categoria", "Contribuições"])
 
     with tab1:
         _render_timeline(db, dates)
@@ -38,6 +39,9 @@ def render_history_component(db: Database):
 
     with tab3:
         _render_category_evolution(db, dates)
+
+    with tab4:
+        render_contribution_history(db)
 
 
 def _render_single_snapshot(db: Database, date: datetime):

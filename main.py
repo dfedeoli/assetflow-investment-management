@@ -11,7 +11,6 @@ from components.upload import render_upload_component
 from components.dashboard import render_dashboard_component
 from components.history import render_history_component
 from components.previdencia import render_previdencia_component
-from components.contribution_history import render_contribution_history
 from utils.gdrive_backup import (
     authenticate_google_drive,
     upload_backup_to_drive,
@@ -247,7 +246,7 @@ def render_sidebar():
     # Navigation
     page = st.sidebar.radio(
         "Navegação",
-        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "💰 Contribuições", "📁 Gerenciar Posições"],
+        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "📁 Gerenciar Posições"],
         label_visibility="collapsed"
     )
 
@@ -388,8 +387,6 @@ def main():
         render_previdencia_component(db)
     elif page == "📈 Histórico":
         render_history_component(db)
-    elif page == "💰 Contribuições":
-        render_contribution_history(db)
     else:
         render_home()
 
