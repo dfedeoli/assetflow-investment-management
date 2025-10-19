@@ -244,20 +244,10 @@ def render_sidebar():
     st.sidebar.title("💰 AssetFlow - Investment Management")
     st.sidebar.markdown("---")
 
-    st.sidebar.subheader("Dashboards")
     # Navigation
     page = st.sidebar.radio(
         "Navegação",
-        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "💰 Contribuições"],
-        label_visibility="collapsed"
-    )
-
-    st.sidebar.markdown("---")
-
-    # Navigation
-    page = st.sidebar.radio(
-        "Navegação",
-        ["📁 Gerenciar Posições"],
+        ["📊 Carteira de Investimento", "💼 Previdência", "📈 Histórico", "💰 Contribuições", "📁 Gerenciar Posições"],
         label_visibility="collapsed"
     )
 
