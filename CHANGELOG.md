@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **AI-Powered PDF/Image Upload**: New upload method using OpenAI Vision API to automatically extract investment positions from documents:
+  - New "Upload - PDF/Imagem (AI)" tab in Gerenciar Posições section
+  - Supports PDF and image files (PNG, JPG, JPEG)
+  - **AI extraction**: Uses OpenAI GPT-4o or GPT-4o-mini to intelligently parse investment statements
+  - **Automatic field extraction**: Extracts asset name, current value, invested value, position date, and categories
+  - **Model selection**: Users can choose between gpt-4o (more accurate) or gpt-4o-mini (more economical)
+  - **Cost transparency**: Displays estimated API cost before processing and actual cost after extraction
+  - **Review workflow**: Similar to XLSX upload - extract, preview, edit, confirm, save
+  - **Multi-page PDF support**: Smart page selection for multi-page documents to save costs:
+    - Visual page selector with thumbnail previews for each page
+    - Checkboxes to select specific pages to process (instead of processing all)
+    - "Select All" / "Clear Selection" helper buttons
+    - Real-time cost estimation based on selected pages (~$0.003-0.004 per page)
+    - Sequential processing with progress bar showing current page being processed
+    - Per-page results display (positions found, cost per page)
+    - Duplicate detection across pages with visual warnings
+    - Highlighted duplicates in yellow with page number badges
+    - Error handling per page (if one page fails, others continue)
+  - **PDF support**: Converts PDF pages to images using poppler-utils (requires system installation)
+  - **Quality handling**: Automatically resizes large images to optimize API calls
+  - **Brazilian format support**: AI understands Brazilian number format (1.234,56) and investment terminology
+  - **Smart categorization**: AI attempts to classify assets into correct categories (Renda Fixa, FII, etc.)
+  - **Setup required**: OpenAI API key must be configured in `.env` file before use
+  - Dependencies: `openai`, `python-dotenv`, `Pillow`, `PyPDF2`
 - **Contribution Tracking System**: Comprehensive system for recording and analyzing investment contributions over time:
   - New "Registrar Contribuição" tab in Import Data section for recording contributions to existing assets
   - **Cumulative contribution tracking**: Enter only the new contribution amount, system automatically adds it to the current asset value
@@ -141,6 +165,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebalancing UI now emphasizes adding new money over selling existing positions
 
 ### Technical Details
+- **AI-Powered PDF/Image Upload Implementation**:
+  - New utility module: `utils/openai_client.py` with `OpenAIExtractor` class:
+    - `extract_positions_from_image()`: Sends image to OpenAI Vision API and extracts structured data
+    - `estimate_cost()`: Calculates estimated API cost based on model and file size
+    - `validate_api_key()`: Tests API key validity before processing
+    - Structured JSON prompt for consistent extraction of position fields
+    - Error handling for API failures, malformed responses, and invalid keys
+  - New parser module: `parsers/pdf_image_parser.py` with `PDFImageParser` class:
+    - `parse()`: Main entry point that routes to PDF or image parsing
+    - `_parse_image()`: Loads image, resizes if needed, converts to JPEG, sends to OpenAI
+    - `_parse_pdf()`: Converts PDF first page to image using pdftoppm (poppler-utils)
+    - `_convert_to_positions()`: Transforms OpenAI response into `InvestmentPosition` objects
+    - `get_summary()`: Generates category-level summary statistics
+    - **Multi-page support methods** (NEW):
+      - `get_page_count()`: Returns number of pages in PDF (1 for images)
+      - `generate_page_thumbnail(page_num, width)`: Creates base64-encoded thumbnail preview of specific page
+      - `parse_multiple_pages(pages_to_process)`: Generator that processes selected pages sequentially
+        - Yields progress dictionaries with status updates after each page
+        - Returns tuple: (all_positions, combined_metadata, duplicate_warnings)
+        - Tracks which pages each asset appears on for duplicate detection
+        - Aggregates costs and tokens across all processed pages
+        - Graceful error handling (failed pages don't stop others)
+      - `detect_duplicates(positions)`: Static method to find assets appearing multiple times
+    - Supported formats: .png, .jpg, .jpeg, .pdf
+  - Environment configuration:
+    - `.env.example` template created with `OPENAI_API_KEY` placeholder
+    - `.env` added to `.gitignore` for security (line 27)
+    - `load_dotenv()` called at startup in main.py (line 12)
+  - UI integration in `components/upload.py`:
+    - New tab "Upload - PDF/Imagem (AI)" added to upload component (line 22)
+    - `_render_pdf_image_upload()`: Main upload handler with multi-page routing logic (lines 815-902)
+    - **Page selection UI** (NEW):
+      - `_render_page_selection()`: Shows thumbnail grid with checkboxes for page selection (lines 1086-1167)
+      - Generates thumbnails on-demand and caches in session state
+      - 3-column grid layout for visual page browsing
+      - Cost metrics update in real-time as pages are selected/deselected
+      - "Select All" / "Clear Selection" helper buttons
+    - **Processing UI** (NEW):
+      - `_render_pdf_image_processing()`: Handles single or multi-page processing (lines 1170-1321)
+      - For multi-page: shows progress bar, processes sequentially, displays per-page results
+      - For single page: original spinner-based flow
+      - Duplicate warnings displayed prominently with expandable details
+    - `_render_pdf_image_editing()`: Stage 2 - review and edit with duplicate highlighting (lines 905-1024)
+      - Yellow background highlight for duplicate assets (lines 946-951)
+      - Warning badges showing which pages each duplicate appears on (lines 958-961)
+      - Top-level warning summary if duplicates exist (lines 931-933)
+    - `_render_pdf_image_final_summary_and_save()`: Stage 3 - save confirmation (lines 1027-1083)
+    - `_clear_pdf_image_editing_state()`: Cleanup function for session state (lines 1324-1336)
+    - **Session state variables** (UPDATED):
+      - Existing: `pdf_image_positions`, `pdf_image_metadata`, `pdf_image_positions_to_remove`, `pdf_image_new_positions`, `pdf_image_original_values`
+      - New for multi-page: `pdf_page_selection_mode`, `pdf_selected_pages`, `pdf_page_thumbnails`, `pdf_temp_path`, `pdf_page_count`, `pdf_duplicate_warnings`
+  - Cost estimation displayed before processing using `OpenAIExtractor.estimate_cost()`
+  - Real-time metrics: tokens used, actual cost, extraction date, pages processed
+  - Reuses existing `_import_positions()` function for database persistence
+  - PDF processing requires poppler-utils: `sudo apt-get install poppler-utils`
+  - Error messages guide users to install dependencies or use alternative formats
 - **Page Reorganization**:
   - Added 4th tab "Contribuições" to history component (components/history.py:32, 43-44)
   - Imported `render_contribution_history` in history.py to embed in new tab (line 10)

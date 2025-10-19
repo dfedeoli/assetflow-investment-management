@@ -5,6 +5,12 @@ A Streamlit app for tracking investment portfolios, analyzing allocations,
 and generating rebalancing recommendations.
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 import streamlit as st
 from database.db import Database
 from components.upload import render_upload_component

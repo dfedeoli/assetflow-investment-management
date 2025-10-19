@@ -5,6 +5,7 @@ File upload and data import component
 import streamlit as st
 from datetime import datetime
 from parsers.xlsx_parser import XLSXParser, InvestmentPosition
+from parsers.pdf_image_parser import PDFImageParser
 from database.db import Database
 from database.models import Position
 
@@ -13,7 +14,13 @@ def render_upload_component(db: Database):
     """Render the file upload interface"""
     st.header("📁 Gerenciar Posições")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Entrada Manual", "Atualizar Posições", "Registrar Contribuição", "Upload - Histórico Carteira XP"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Entrada Manual",
+        "Atualizar Posições",
+        "Registrar Contribuição",
+        "Upload - Histórico Carteira XP",
+        "Upload - PDF/Imagem (AI)"
+    ])
 
     with tab1:
         _render_manual_entry(db)
@@ -26,6 +33,9 @@ def render_upload_component(db: Database):
 
     with tab4:
          _render_xlsx_upload(db)
+
+    with tab5:
+        _render_pdf_image_upload(db)
 
 
 def _render_xlsx_upload(db: Database):
@@ -800,3 +810,548 @@ def _clear_editing_state():
     st.session_state.positions_to_remove = set()
     st.session_state.new_positions = []
     st.session_state.original_values = {}
+
+
+def _render_pdf_image_upload(db: Database):
+    """Render PDF/Image file upload with AI extraction"""
+    st.subheader("Upload de PDF/Imagem - Extração com IA")
+
+    st.info(
+        "📸 **Nova funcionalidade com IA!** Faça upload de extratos em PDF ou imagem e deixe a IA extrair automaticamente as posições.\n\n"
+        "✨ Suporta: PDF, PNG, JPG, JPEG\n\n"
+        "⚠️ **Importante:** Configure sua chave da API OpenAI no arquivo `.env` antes de usar."
+    )
+
+    # Initialize session state for PDF/Image editing
+    if 'pdf_image_positions' not in st.session_state:
+        st.session_state.pdf_image_positions = None
+        st.session_state.pdf_image_metadata = None
+        st.session_state.pdf_image_positions_to_remove = set()
+        st.session_state.pdf_image_new_positions = []
+        st.session_state.pdf_image_original_values = {}
+        st.session_state.pdf_page_selection_mode = False
+        st.session_state.pdf_selected_pages = []
+        st.session_state.pdf_page_thumbnails = {}
+        st.session_state.pdf_temp_path = None
+        st.session_state.pdf_page_count = 0
+        st.session_state.pdf_duplicate_warnings = {}
+
+    # Stage 1: Upload and parse (only show if not currently editing)
+    if st.session_state.pdf_image_positions is None:
+        # Model selection
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Selecione o arquivo PDF ou imagem do seu extrato",
+                type=["pdf", "png", "jpg", "jpeg"],
+                help="Faça upload de um extrato de investimentos em PDF ou imagem"
+            )
+
+        with col2:
+            model = st.selectbox(
+                "Modelo OpenAI",
+                options=["gpt-4o", "gpt-4o-mini"],
+                index=0,
+                help="gpt-4o: Mais preciso, maior custo\ngpt-4o-mini: Mais econômico, boa precisão"
+            )
+
+            # Show estimated cost
+            if uploaded_file:
+                from utils.openai_client import OpenAIExtractor
+                file_size_kb = len(uploaded_file.getvalue()) / 1024
+                estimated_cost = OpenAIExtractor.estimate_cost(model, file_size_kb)
+                st.metric("Custo Estimado", f"${estimated_cost:.4f} USD")
+
+        if uploaded_file is not None:
+            try:
+                # Validate API key first
+                from utils.openai_client import OpenAIExtractor
+
+                try:
+                    extractor = OpenAIExtractor()
+                except ValueError as e:
+                    st.error(str(e))
+                    st.stop()
+
+                # Save temporarily
+                temp_path = f"/tmp/{uploaded_file.name}"
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+
+                parser = PDFImageParser(temp_path, model=model)
+
+                # Check if PDF with multiple pages
+                page_count = parser.get_page_count()
+                is_pdf = uploaded_file.name.lower().endswith('.pdf')
+
+                # Stage 1A: PDF Page Selection (only for multi-page PDFs)
+                if is_pdf and page_count > 1 and not st.session_state.pdf_page_selection_mode:
+                    _render_page_selection(parser, page_count, model, temp_path)
+
+                # Stage 1B: Process file (single page image, single page PDF, or after page selection)
+                elif st.session_state.pdf_page_selection_mode or page_count == 1:
+                    _render_pdf_image_processing(parser, model, temp_path, is_pdf, page_count)
+
+            except Exception as e:
+                st.error(f"Erro ao processar arquivo: {str(e)}")
+                st.exception(e)
+
+    # Stage 2: Edit positions (reuse logic from XLSX)
+    else:
+        _render_pdf_image_editing(db)
+
+
+def _render_pdf_image_editing(db: Database):
+    """Render editing interface for PDF/Image positions (mirrors XLSX editing)"""
+    positions = st.session_state.pdf_image_positions
+    metadata = st.session_state.pdf_image_metadata
+    position_date = metadata.get('position_date', datetime.now())
+
+    st.subheader("✏️ Revisar e Editar Posições Extraídas")
+    st.write("Revise os dados extraídos pela IA, edite valores, remova posições incorretas ou adicione novas antes de salvar.")
+
+    # Show summary
+    total_value = sum(p.value for p in positions
+                     if positions.index(p) not in st.session_state.pdf_image_positions_to_remove)
+    kept_count = len(positions) - len(st.session_state.pdf_image_positions_to_remove)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Data da Posição", position_date.strftime('%d/%m/%Y'))
+    with col2:
+        st.metric("Posições Ativas", f"{kept_count} de {len(positions)}")
+    with col3:
+        final_total = total_value + sum(p.value for p in st.session_state.pdf_image_new_positions)
+        st.metric("Valor Total", f"R$ {final_total:,.2f}")
+
+    st.divider()
+
+    # Show duplicate warnings if any
+    duplicate_warnings = st.session_state.pdf_duplicate_warnings
+    if duplicate_warnings:
+        st.warning(f"⚠️ **{len(duplicate_warnings)} ativos duplicados detectados!** Revise os itens marcados abaixo.")
+
+    # Editable positions table
+    st.subheader("Posições Extraídas")
+    for idx, pos in enumerate(positions):
+        if idx in st.session_state.pdf_image_positions_to_remove:
+            continue
+
+        # Check if this position is a duplicate
+        is_duplicate = pos.name in duplicate_warnings
+        duplicate_pages = duplicate_warnings.get(pos.name, [])
+
+        # Apply styling for duplicates
+        if is_duplicate:
+            st.markdown(f"""
+            <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin-bottom: 10px; border-radius: 4px;">
+                <strong>⚠️ DUPLICADO</strong> - Aparece nas páginas: {', '.join(map(str, duplicate_pages))}
+            </div>
+            """, unsafe_allow_html=True)
+
+        with st.container():
+            col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1.5, 1, 1])
+
+            with col1:
+                # Add warning badge for duplicates
+                if is_duplicate:
+                    st.write(f"**{pos.name}** ⚠️")
+                else:
+                    st.write(f"**{pos.name}**")
+                st.caption(f"{pos.main_category} - {pos.sub_category}")
+
+            with col2:
+                # Show original value
+                original_value = st.session_state.pdf_image_original_values.get(idx, pos.value)
+                st.metric("Original", f"R$ {original_value:,.2f}", label_visibility="collapsed")
+
+            with col3:
+                # Editable value
+                new_value = st.number_input(
+                    "Novo Valor (R$)",
+                    min_value=0.0,
+                    value=float(pos.value),
+                    step=100.0,
+                    key=f"pdf_image_pos_value_{idx}",
+                    label_visibility="collapsed"
+                )
+                pos.value = new_value
+
+            with col4:
+                # Show change indicator
+                if abs(new_value - original_value) > 0.01:
+                    change_pct = ((new_value - original_value) / original_value * 100) if original_value > 0 else 0
+                    st.metric("Δ", f"{change_pct:+.1f}%", label_visibility="collapsed")
+
+            with col5:
+                if st.button("🗑️", key=f"pdf_image_remove_{idx}", help="Remover esta posição"):
+                    st.session_state.pdf_image_positions_to_remove.add(idx)
+                    st.rerun()
+
+            st.divider()
+
+    # Section to add new positions
+    st.subheader("➕ Adicionar Novas Posições")
+
+    with st.form("pdf_image_add_new_position"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            new_name = st.text_input("Nome do Ativo")
+            new_value = st.number_input("Valor (R$)", min_value=0.0, step=100.0)
+            new_main_cat = st.selectbox(
+                "Categoria Principal",
+                ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários",
+                 "Previdência Privada", "COE", "Outro"]
+            )
+
+        with col2:
+            new_sub_cat = st.text_input("Subcategoria")
+            new_invested = st.number_input("Valor Investido (R$) - Opcional", min_value=0.0, step=100.0)
+
+        if st.form_submit_button("➕ Adicionar à Lista"):
+            if new_name and new_value > 0:
+                # Create InvestmentPosition
+                new_pos = InvestmentPosition(
+                    name=new_name,
+                    value=new_value,
+                    main_category=new_main_cat,
+                    sub_category=new_sub_cat,
+                    date=position_date,
+                    invested_value=new_invested if new_invested > 0 else None
+                )
+                st.session_state.pdf_image_new_positions.append(new_pos)
+                st.rerun()
+
+    # Show new positions to be added
+    if st.session_state.pdf_image_new_positions:
+        st.subheader("Novas Posições a Adicionar")
+        for idx, pos in enumerate(st.session_state.pdf_image_new_positions):
+            col1, col2, col3 = st.columns([4, 2, 1])
+            with col1:
+                st.write(f"**{pos.name}**")
+                st.caption(f"{pos.main_category} - {pos.sub_category}")
+            with col2:
+                st.write(f"R$ {pos.value:,.2f}")
+            with col3:
+                if st.button("🗑️", key=f"pdf_image_remove_new_{idx}"):
+                    st.session_state.pdf_image_new_positions.pop(idx)
+                    st.rerun()
+
+    # Final summary and save
+    st.divider()
+    _render_pdf_image_final_summary_and_save(db, positions, position_date)
+
+
+def _render_pdf_image_final_summary_and_save(db: Database, positions: list, position_date: datetime):
+    """Render final summary and save options for PDF/Image import"""
+    # Calculate final positions
+    final_positions = [p for idx, p in enumerate(positions)
+                      if idx not in st.session_state.pdf_image_positions_to_remove]
+    final_positions.extend(st.session_state.pdf_image_new_positions)
+    final_value = sum(p.value for p in final_positions)
+
+    st.subheader("Resumo Final")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total de Posições", len(final_positions))
+    with col2:
+        st.metric("Valor Total", f"R$ {final_value:,.2f}")
+    with col3:
+        original_value = sum(p.value for p in positions)
+        change = ((final_value - original_value) / original_value * 100) if original_value > 0 else 0
+        st.metric("Variação", f"{change:+.2f}%")
+
+    # Check for duplicate date
+    existing_positions = db.get_positions_by_date(position_date)
+
+    if existing_positions:
+        st.warning(
+            f"⚠️ Já existem {len(existing_positions)} posições para a data "
+            f"{position_date.strftime('%d/%m/%Y')}. "
+            f"Importar novamente irá adicionar posições duplicadas."
+        )
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("🗑️ Deletar Existentes e Salvar", type="secondary"):
+                db.delete_positions_by_date(position_date)
+                _import_positions(db, final_positions)
+                _clear_pdf_image_editing_state()
+                st.rerun()
+
+        with col2:
+            if st.button("➕ Salvar Mesmo Assim", type="secondary"):
+                _import_positions(db, final_positions)
+                _clear_pdf_image_editing_state()
+                st.rerun()
+
+        with col3:
+            if st.button("❌ Cancelar", type="secondary"):
+                _clear_pdf_image_editing_state()
+                st.rerun()
+    else:
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("💾 Salvar Posições", type="primary"):
+                _import_positions(db, final_positions)
+                _clear_pdf_image_editing_state()
+                st.rerun()
+        with col2:
+            if st.button("❌ Cancelar", type="secondary"):
+                _clear_pdf_image_editing_state()
+                st.rerun()
+
+
+def _render_page_selection(parser, page_count: int, model: str, temp_path: str):
+    """Render page selection UI for multi-page PDFs"""
+    from utils.openai_client import OpenAIExtractor
+
+    st.subheader(f"📄 Selecionar Páginas ({page_count} páginas encontradas)")
+    st.write("Escolha quais páginas você deseja processar para economizar custos. Apenas as páginas selecionadas serão enviadas para a IA.")
+
+    # Cost estimation
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        estimated_cost_per_page = OpenAIExtractor.estimate_cost(model, 200)  # Rough estimate
+        st.metric("Custo por Página", f"~${estimated_cost_per_page:.4f} USD")
+    with col2:
+        selected_count = len([p for p in range(1, page_count + 1) if st.session_state.get(f"page_checkbox_{p}", False)])
+        st.metric("Páginas Selecionadas", selected_count)
+    with col3:
+        total_estimated = estimated_cost_per_page * selected_count
+        st.metric("Custo Total Estimado", f"${total_estimated:.4f} USD")
+
+    st.divider()
+
+    # Select All / Deselect All buttons
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("✅ Selecionar Todas", use_container_width=True):
+            for page_num in range(1, page_count + 1):
+                st.session_state[f"page_checkbox_{page_num}"] = True
+            st.rerun()
+    with col2:
+        if st.button("❌ Limpar Seleção", use_container_width=True):
+            for page_num in range(1, page_count + 1):
+                st.session_state[f"page_checkbox_{page_num}"] = False
+            st.rerun()
+
+    st.divider()
+
+    # Generate and show thumbnails with checkboxes
+    with st.spinner("Gerando miniaturas das páginas..."):
+        for page_num in range(1, page_count + 1):
+            # Generate thumbnail if not cached
+            if page_num not in st.session_state.pdf_page_thumbnails:
+                try:
+                    thumb_base64 = parser.generate_page_thumbnail(page_num, width=200)
+                    st.session_state.pdf_page_thumbnails[page_num] = thumb_base64
+                except Exception as e:
+                    st.session_state.pdf_page_thumbnails[page_num] = None
+                    st.warning(f"Erro ao gerar miniatura da página {page_num}: {str(e)}")
+
+    # Display pages with checkboxes
+    num_cols = 3  # 3 pages per row
+    for row_start in range(1, page_count + 1, num_cols):
+        cols = st.columns(num_cols)
+        for col_idx, page_num in enumerate(range(row_start, min(row_start + num_cols, page_count + 1))):
+            with cols[col_idx]:
+                # Show thumbnail if available
+                thumb = st.session_state.pdf_page_thumbnails.get(page_num)
+                if thumb:
+                    st.image(f"data:image/jpeg;base64,{thumb}", caption=f"Página {page_num}", use_container_width=True)
+                else:
+                    st.info(f"Página {page_num}\n(Miniatura indisponível)")
+
+                # Checkbox for selection
+                st.checkbox(
+                    f"Processar página {page_num}",
+                    key=f"page_checkbox_{page_num}",
+                    value=st.session_state.get(f"page_checkbox_{page_num}", page_num == 1)  # Default: select first page
+                )
+
+    st.divider()
+
+    # Process selected pages button
+    selected_pages = [p for p in range(1, page_count + 1) if st.session_state.get(f"page_checkbox_{p}", False)]
+
+    if not selected_pages:
+        st.warning("⚠️ Nenhuma página selecionada. Selecione pelo menos uma página para processar.")
+    else:
+        if st.button(f"🚀 Processar {len(selected_pages)} Página(s) Selecionada(s)", type="primary", use_container_width=True):
+            st.session_state.pdf_selected_pages = selected_pages
+            st.session_state.pdf_page_selection_mode = True
+            st.session_state.pdf_temp_path = temp_path
+            st.session_state.pdf_page_count = page_count
+            st.rerun()
+
+
+def _render_pdf_image_processing(parser, model: str, temp_path: str, is_pdf: bool, page_count: int):
+    """Render processing UI with progress for single or multiple pages"""
+
+    # Determine which pages to process
+    if is_pdf and st.session_state.pdf_page_selection_mode:
+        pages_to_process = st.session_state.pdf_selected_pages
+    else:
+        pages_to_process = [1]  # Single page (image or single-page PDF)
+
+    # Multi-page processing with progress
+    if len(pages_to_process) > 1:
+        st.subheader(f"🤖 Processando {len(pages_to_process)} Páginas")
+
+        # Progress container
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        results_container = st.container()
+
+        all_positions = []
+        combined_metadata = {}
+        duplicate_warnings = {}
+
+        try:
+            # Process pages sequentially
+            page_generator = parser.parse_multiple_pages(pages_to_process)
+
+            for progress_update in page_generator:
+                status = progress_update.get('status')
+
+                if status == 'processing':
+                    progress_pct = (progress_update['current_page'] - 1) / progress_update['total_pages']
+                    progress_bar.progress(progress_pct)
+                    status_text.info(f"⏳ Processando página {progress_update['page_number']} ({progress_update['current_page']} de {progress_update['total_pages']})...")
+
+                elif status == 'completed':
+                    progress_pct = progress_update['current_page'] / progress_update['total_pages']
+                    progress_bar.progress(progress_pct)
+
+                    with results_container:
+                        st.success(f"✅ Página {progress_update['page_number']}: {progress_update['positions_found']} posições encontradas (Custo: ${progress_update['page_cost']:.4f})")
+
+                elif status == 'error':
+                    with results_container:
+                        st.error(f"❌ Erro na página {progress_update['page_number']}: {progress_update.get('error', 'Erro desconhecido')}")
+
+            # Get final results (generator returns this after yielding all progress updates)
+            all_positions, combined_metadata, duplicate_warnings = page_generator.send(None) if hasattr(page_generator, 'send') else ([], {}, {})
+
+            # Extract the actual values from the generator return
+            try:
+                all_positions, combined_metadata, duplicate_warnings = next(page_generator)
+            except StopIteration as e:
+                all_positions, combined_metadata, duplicate_warnings = e.value
+
+            progress_bar.progress(1.0)
+            status_text.success("✅ Processamento concluído!")
+
+        except Exception as e:
+            st.error(f"Erro durante processamento: {str(e)}")
+            st.exception(e)
+            return
+
+        positions = all_positions
+        metadata = combined_metadata
+
+    else:
+        # Single page processing (original flow)
+        with st.spinner(f"🤖 Analisando documento com {model}... Isso pode levar alguns segundos..."):
+            try:
+                positions, metadata = parser.parse()
+                duplicate_warnings = {}
+            except NotImplementedError as e:
+                st.error(str(e))
+                return
+            except Exception as e:
+                st.error(f"Erro ao processar arquivo: {str(e)}")
+                st.exception(e)
+                return
+
+    if not positions:
+        st.error("❌ Nenhuma posição foi encontrada no arquivo. Tente outro arquivo ou verifique a qualidade da imagem.")
+        return
+
+    # Show success
+    st.success(f"✅ {len(positions)} posições extraídas com sucesso!")
+
+    # Display metadata
+    if metadata:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            if 'position_date' in metadata:
+                st.metric("Data da Posição", metadata['position_date'].strftime('%d/%m/%Y'))
+        with col2:
+            st.metric("Modelo Usado", metadata.get('model_used', model))
+        with col3:
+            if 'total_tokens' in metadata:
+                st.metric("Tokens Usados", f"{metadata['total_tokens']:,}")
+        with col4:
+            if 'total_cost' in metadata:
+                st.metric("Custo Total", f"${metadata['total_cost']:.4f}")
+            elif 'estimated_cost' in metadata:
+                st.metric("Custo (est.)", f"${metadata['estimated_cost']:.4f}")
+
+    # Show duplicate warnings if any
+    if duplicate_warnings:
+        st.warning(f"⚠️ **Avisos de Duplicados:** {len(duplicate_warnings)} ativos aparecem em múltiplas páginas. Revise na próxima etapa.")
+        with st.expander("Ver detalhes dos duplicados"):
+            for asset_name, pages in duplicate_warnings.items():
+                st.write(f"- **{asset_name}**: páginas {', '.join(map(str, pages))}")
+
+    # Show summary by category
+    st.subheader("Resumo por Categoria")
+    summary = parser.get_summary(positions)
+    if 'categories' in summary:
+        for cat, data in summary['categories'].items():
+            pct = (data['value'] / summary['total_value'] * 100) if summary['total_value'] > 0 else 0
+            st.write(f"**{cat}**: {data['count']} posições, R$ {data['value']:,.2f} ({pct:.1f}%)")
+
+    # Show preview table
+    st.subheader("Prévia das Posições Extraídas")
+    preview_data = []
+    preview_number = 30
+    for p in positions[:preview_number]:
+        preview_data.append({
+            'Nome': p.name,
+            'Valor': f"R$ {p.value:,.2f}",
+            'Categoria': p.main_category,
+            'Subcategoria': p.sub_category,
+            'Investido': f"R$ {p.invested_value:,.2f}" if p.invested_value else "-"
+        })
+
+    st.dataframe(preview_data, use_container_width=True)
+
+    if len(positions) > preview_number:
+        st.info(f"Mostrando {preview_number} de {len(positions)} posições...")
+
+    # Button to proceed to editing
+    st.divider()
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("✏️ Revisar e Editar Posições", type="primary", use_container_width=True):
+            st.session_state.pdf_image_positions = positions
+            st.session_state.pdf_image_metadata = metadata
+            st.session_state.pdf_duplicate_warnings = duplicate_warnings
+            st.session_state.pdf_image_positions_to_remove = set()
+            st.session_state.pdf_image_new_positions = []
+            # Store original values
+            st.session_state.pdf_image_original_values = {idx: p.value for idx, p in enumerate(positions)}
+            st.rerun()
+
+    with col2:
+        st.caption("💡 **Dica:** Sempre revise os valores extraídos pela IA antes de salvar!")
+
+
+def _clear_pdf_image_editing_state():
+    """Clear PDF/Image editing session state"""
+    st.session_state.pdf_image_positions = None
+    st.session_state.pdf_image_metadata = None
+    st.session_state.pdf_image_positions_to_remove = set()
+    st.session_state.pdf_image_new_positions = []
+    st.session_state.pdf_image_original_values = {}
+    st.session_state.pdf_page_selection_mode = False
+    st.session_state.pdf_selected_pages = []
+    st.session_state.pdf_page_thumbnails = {}
+    st.session_state.pdf_temp_path = None
+    st.session_state.pdf_page_count = 0
+    st.session_state.pdf_duplicate_warnings = {}
