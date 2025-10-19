@@ -506,16 +506,20 @@ def _render_pgbl_planning(db: Database):
     taxable_income = pgbl_calc.calculate_taxable_income(income_entries)
     pgbl_limit = pgbl_calc.calculate_pgbl_limit(taxable_income)
 
-    # Get PGBL contributions (positions from Previdência in selected year)
+    # Get PGBL contributions from contributions table (actual money contributed)
     start_of_year = datetime(selected_year, 1, 1)
     end_of_year = datetime(selected_year, 12, 31, 23, 59, 59)
-    pgbl_positions = db.get_positions_between_dates(start_of_year, end_of_year)
-    pgbl_positions = [p for p in pgbl_positions if p.custom_label == "Previdência"]
+    all_contributions = db.get_contributions_between_dates(start_of_year, end_of_year)
 
-    # Sum invested values (or current values if invested_value is not available)
-    current_pgbl_contributions = sum(
-        p.invested_value if p.invested_value else p.value for p in pgbl_positions
-    )
+    # Filter for Previdência assets by checking asset mapping
+    pgbl_contributions = []
+    for contrib in all_contributions:
+        mapping = db.get_asset_mapping(contrib.asset_name)
+        if mapping and mapping.custom_label == "Previdência":
+            pgbl_contributions.append(contrib)
+
+    # Sum actual contribution amounts (not position values!)
+    current_pgbl_contributions = sum(c.contribution_amount for c in pgbl_contributions)
 
     remaining_investment = pgbl_calc.calculate_remaining_investment(pgbl_limit, current_pgbl_contributions)
     completion_pct = pgbl_calc.calculate_completion_percentage(pgbl_limit, current_pgbl_contributions)

@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Preview interface**: Shows "Previous Value → +Contribution → =New Total" before saving
   - **Category preservation**: Maintains all custom_label and sub_label mappings from previous position
   - **Migration support**: Idempotent migration script for existing databases (`utils/migrate_contributions.py`)
+  - **Backfill utility**: Script to populate contribution records for positions added before the contributions feature was implemented (`utils/backfill_contributions.py`):
+    - Automatically detects initial positions (first occurrence of each asset) without contribution records
+    - Creates contribution records with proper values (previous_value=0, contribution_amount=invested_value)
+    - Idempotent (safe to run multiple times, skips existing contributions)
+    - Detailed report of backfilled contributions with totals
+    - Fixes PGBL planning for portfolios created before contribution tracking existed
+    - Usage: `python utils/backfill_contributions.py [db_path]`
   - **Use cases**: Perfect for tracking annual Previdência contributions for tax purposes, regular savings deposits, or any incremental investments
 - **PGBL Tax Planning & Income Tracker**: Comprehensive tax planning tool for maximizing PGBL (Previdência Privada) deductions:
   - New "📊 Planejamento PGBL" tab in Previdência component
@@ -106,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clear visual status indicators (✅ balanced, 🔴 underweight, ⚠️ overweight)
 
 ### Fixed
+- **PGBL Tax Planning Calculation**: Fixed incorrect calculation that was summing all position snapshots instead of actual contributions. The PGBL planning feature now correctly uses the contributions table to count only new money invested during the selected year, preventing double-counting of positions that were snapshot multiple times (components/previdencia.py:509-522).
 - **Contribution Registration Filter**: Fixed category filter not updating asset list in real-time. Filter is now outside the form, allowing immediate updates when selecting a category instead of waiting for form submission.
 
 ### Changed
