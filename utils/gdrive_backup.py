@@ -75,8 +75,13 @@ def authenticate_google_drive(auth_code: Optional[str] = None) -> tuple[Optional
             try:
                 creds.refresh(Request())
             except Exception as e:
-                raise GoogleDriveBackupError(f"Failed to refresh credentials: {str(e)}")
-        else:
+                # Refresh token is invalid (expired, revoked, or user changed password)
+                # Delete the invalid token and start fresh OAuth flow
+                if os.path.exists(TOKEN_FILE):
+                    os.remove(TOKEN_FILE)
+                creds = None
+
+        if not creds:
             # Manual OAuth flow for WSL2/headless environments
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
