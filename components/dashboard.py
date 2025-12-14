@@ -13,7 +13,7 @@ def render_dashboard_component(db: Database):
     """Render portfolio dashboard"""
     st.header("📊 Carteira de Investimento")
 
-    # Get latest positions
+    # Get all positions from the latest date (complete snapshot)
     all_positions = db.get_latest_positions()
 
     if not all_positions:

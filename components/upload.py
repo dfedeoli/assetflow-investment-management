@@ -394,9 +394,9 @@ def _render_manual_entry(db: Database):
 def _render_record_contribution(db: Database):
     """Render interface to record contributions to existing assets"""
     st.subheader("💰 Registrar Contribuição")
-    st.write("Registre novas contribuições para ativos existentes. O valor da contribuição será adicionado ao valor atual do ativo.")
+    st.write("Registre novas contribuições para ativos existentes. Adicione múltiplas contribuições à lista antes de salvar.")
 
-    # Get latest positions
+    # Get all positions from the latest date (complete snapshot)
     latest_positions = db.get_latest_positions()
 
     if not latest_positions:
@@ -412,15 +412,28 @@ def _render_record_contribution(db: Database):
     # Initialize session state for contribution recording
     if 'contribution_preview' not in st.session_state:
         st.session_state.contribution_preview = None
+    if 'contribution_batch' not in st.session_state:
+        st.session_state.contribution_batch = []
+    if 'contribution_form_key' not in st.session_state:
+        st.session_state.contribution_form_key = 0
 
     st.subheader("Dados da Contribuição")
 
     # Custom label filter - OUTSIDE form so it triggers reruns
-    selected_label = st.selectbox(
-        "Filtrar por Categoria",
-        options=["Todas as Categorias"] + custom_labels,
-        help="Filtre os ativos por categoria para facilitar a seleção"
-    )
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        selected_label = st.selectbox(
+            "Filtrar por Categoria",
+            options=["Todas as Categorias"] + custom_labels,
+            help="Filtre os ativos por categoria para facilitar a seleção",
+            key="contrib_category_filter"
+        )
+    with col2:
+        st.write("")  # Spacer
+        if st.button("🔄 Resetar", help="Mostrar todas as categorias"):
+            if "contrib_category_filter" in st.session_state:
+                del st.session_state.contrib_category_filter
+            st.rerun()
 
     # Filter positions based on selected custom_label
     if selected_label == "Todas as Categorias":
@@ -435,8 +448,8 @@ def _render_record_contribution(db: Database):
         st.warning(f"Nenhum ativo encontrado na categoria '{selected_label}'.")
         return
 
-    # Now start the form with the already-filtered asset list
-    with st.form("record_contribution_form"):
+    # Now start the form with the already-filtered asset list (dynamic key for reset)
+    with st.form(f"record_contribution_form_{st.session_state.contribution_form_key}"):
         col1, col2 = st.columns(2)
 
         with col1:
@@ -502,8 +515,8 @@ def _render_record_contribution(db: Database):
                         f"R$ {current_position.invested_value + contribution_amount:,.2f}"
                     )
 
-        # Submit button
-        submitted = st.form_submit_button("💾 Registrar Contribuição", type="primary")
+        # Submit button - changed to "Add to Batch"
+        submitted = st.form_submit_button("➕ Adicionar à Lista", type="primary")
 
         if submitted:
             if not selected_asset:
@@ -511,39 +524,208 @@ def _render_record_contribution(db: Database):
             elif contribution_amount <= 0:
                 st.error("Por favor, digite um valor de contribuição maior que zero.")
             else:
-                try:
-                    # Record the contribution
-                    contribution_datetime = datetime.combine(contribution_date, datetime.min.time())
+                # Validate date is not before last position
+                contribution_datetime = datetime.combine(contribution_date, datetime.min.time())
+                current_position = next((pos for pos in filtered_positions if pos.name == selected_asset), None)
 
-                    # Validate date is not before last position
-                    current_position = next((pos for pos in filtered_positions if pos.name == selected_asset), None)
-                    if current_position and contribution_datetime < current_position.date:
-                        st.error(
-                            f"A data da contribuição ({contribution_date.strftime('%d/%m/%Y')}) não pode ser "
-                            f"anterior à última posição registrada ({current_position.date.strftime('%d/%m/%Y')})."
-                        )
-                    else:
-                        contribution_id, position_id = db.add_contribution(
-                            asset_name=selected_asset,
-                            contribution_amount=contribution_amount,
-                            contribution_date=contribution_datetime,
-                            notes=notes if notes else None
-                        )
+                if current_position and contribution_datetime < current_position.date:
+                    st.error(
+                        f"A data da contribuição ({contribution_date.strftime('%d/%m/%Y')}) não pode ser "
+                        f"anterior à última posição registrada ({current_position.date.strftime('%d/%m/%Y')})."
+                    )
+                else:
+                    # Add to batch instead of immediate registration
+                    batch_item = {
+                        'asset_name': selected_asset,
+                        'contribution_amount': contribution_amount,
+                        'contribution_date': contribution_datetime,
+                        'notes': notes if notes else None,
+                        'current_value': current_position.value if current_position else 0,
+                        'custom_label': current_position.custom_label if current_position else None
+                    }
+                    st.session_state.contribution_batch.append(batch_item)
+                    # Increment form key to reset the form
+                    st.session_state.contribution_form_key += 1
+                    st.rerun()
 
-                        st.success(
-                            f"✓ Contribuição de R$ {contribution_amount:,.2f} registrada com sucesso para '{selected_asset}'!"
-                        )
-                        st.info(f"Nova posição criada para a data {contribution_date.strftime('%d/%m/%Y')}.")
+    # Show batch preview and register all button
+    if st.session_state.contribution_batch:
+        st.divider()
+        st.subheader("📋 Contribuições a Registrar")
 
-                        # Clear preview and rerun
-                        st.session_state.contribution_preview = None
+        # Summary metrics
+        total_contributions = len(st.session_state.contribution_batch)
+        total_amount = sum(item['contribution_amount'] for item in st.session_state.contribution_batch)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total de Contribuições", total_contributions)
+        with col2:
+            st.metric("Valor Total", f"R$ {total_amount:,.2f}")
+        with col3:
+            unique_assets = len(set(item['asset_name'] for item in st.session_state.contribution_batch))
+            st.metric("Ativos Distintos", unique_assets)
+
+        # Batch table
+        st.write("**Lista de Contribuições:**")
+        for idx, item in enumerate(st.session_state.contribution_batch):
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1.5, 1.5, 0.8])
+
+                with col1:
+                    st.write(f"**{item['asset_name']}**")
+                    if item['custom_label']:
+                        st.caption(f"📊 {item['custom_label']}")
+
+                with col2:
+                    st.metric("Atual", f"R$ {item['current_value']:,.2f}", label_visibility="collapsed")
+
+                with col3:
+                    st.metric("Contribuição", f"+ R$ {item['contribution_amount']:,.2f}", label_visibility="collapsed")
+
+                with col4:
+                    new_total = item['current_value'] + item['contribution_amount']
+                    st.metric("Novo Total", f"R$ {new_total:,.2f}", label_visibility="collapsed")
+
+                with col5:
+                    if st.button("🗑️", key=f"remove_batch_{idx}", help="Remover da lista"):
+                        st.session_state.contribution_batch.pop(idx)
                         st.rerun()
 
-                except ValueError as e:
-                    st.error(f"Erro: {str(e)}")
+                # Show date and notes if available
+                caption_parts = [f"📅 {item['contribution_date'].strftime('%d/%m/%Y')}"]
+                if item['notes']:
+                    caption_parts.append(f"📝 {item['notes']}")
+                st.caption(" | ".join(caption_parts))
+
+                st.divider()
+
+        # Register all button
+        col1, col2, col3 = st.columns([1, 1, 2])
+        with col1:
+            if st.button("💾 Registrar Todas", type="primary", use_container_width=True):
+                try:
+                    success_count = 0
+                    errors = []
+
+                    with st.spinner(f"Registrando {total_contributions} contribuições..."):
+                        # Group contributions by date to create complete snapshots
+                        from collections import defaultdict
+                        contributions_by_date = defaultdict(list)
+
+                        for item in st.session_state.contribution_batch:
+                            contributions_by_date[item['contribution_date']].append(item)
+
+                        # Process each date separately to create complete snapshots
+                        for contribution_date, date_contributions in sorted(contributions_by_date.items()):
+                            try:
+                                # Get all positions from the latest date (complete snapshot)
+                                base_positions = db.get_latest_positions()
+
+                                if not base_positions:
+                                    errors.append(f"Erro: Nenhuma posição base encontrada para {contribution_date.strftime('%d/%m/%Y')}")
+                                    continue
+
+                                # Create a dictionary of positions by asset name for easy lookup
+                                positions_dict = {pos.name: pos for pos in base_positions}
+
+                                # Track which assets received contributions
+                                assets_with_contributions = set()
+
+                                # Update positions for assets that received contributions
+                                for item in date_contributions:
+                                    asset_name = item['asset_name']
+
+                                    if asset_name not in positions_dict:
+                                        errors.append(f"Erro em '{asset_name}': Ativo não encontrado nas posições base")
+                                        continue
+
+                                    assets_with_contributions.add(asset_name)
+
+                                    # Get the base position
+                                    base_pos = positions_dict[asset_name]
+
+                                    # Calculate new values
+                                    new_value = base_pos.value + item['contribution_amount']
+                                    previous_invested = base_pos.invested_value or base_pos.value
+                                    new_invested = previous_invested + item['contribution_amount']
+
+                                    # Update the position in the dictionary
+                                    positions_dict[asset_name] = Position(
+                                        name=asset_name,
+                                        value=new_value,
+                                        main_category=base_pos.main_category,
+                                        sub_category=base_pos.sub_category,
+                                        custom_label=base_pos.custom_label,
+                                        sub_label=base_pos.sub_label,
+                                        date=contribution_date,
+                                        invested_value=new_invested,
+                                        percentage=base_pos.percentage,
+                                        quantity=base_pos.quantity,
+                                        additional_info=base_pos.additional_info
+                                    )
+
+                                # Now save ALL positions (complete snapshot) for this date
+                                for asset_name, pos in positions_dict.items():
+                                    # Update date to contribution_date if it wasn't already updated
+                                    if pos.date != contribution_date:
+                                        pos.date = contribution_date
+
+                                    # Save the position
+                                    position_id = db.add_position(pos)
+
+                                    # If this asset received a contribution, record it in contributions table
+                                    if asset_name in assets_with_contributions:
+                                        # Find the contribution item for this asset
+                                        contrib_item = next(
+                                            (item for item in date_contributions if item['asset_name'] == asset_name),
+                                            None
+                                        )
+                                        if contrib_item:
+                                            # Record in contributions table (manually, since add_contribution already created the position)
+                                            cursor = db.conn.cursor()
+                                            cursor.execute("""
+                                                INSERT INTO contributions (
+                                                    asset_name, contribution_amount, contribution_date,
+                                                    position_id, previous_value, new_total_value, notes
+                                                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                                            """, (
+                                                asset_name,
+                                                contrib_item['contribution_amount'],
+                                                contribution_date.isoformat(),
+                                                position_id,
+                                                contrib_item['current_value'],
+                                                pos.value,
+                                                contrib_item['notes']
+                                            ))
+                                            db.conn.commit()
+                                            success_count += 1
+
+                            except Exception as e:
+                                errors.append(f"Erro ao processar contribuições de {contribution_date.strftime('%d/%m/%Y')}: {str(e)}")
+
+                    # Clear batch after processing
+                    st.session_state.contribution_batch = []
+
+                    # Show results
+                    if success_count > 0:
+                        st.success(f"✓ {success_count} contribuições registradas com sucesso!")
+
+                    if errors:
+                        st.error(f"❌ {len(errors)} erro(s) encontrado(s):")
+                        for error in errors:
+                            st.error(error)
+
+                    st.rerun()
+
                 except Exception as e:
-                    st.error(f"Erro ao registrar contribuição: {str(e)}")
+                    st.error(f"Erro ao processar contribuições: {str(e)}")
                     st.exception(e)
+
+        with col2:
+            if st.button("🗑️ Limpar Lista", type="secondary", use_container_width=True):
+                st.session_state.contribution_batch = []
+                st.rerun()
 
 
 def _render_update_positions(db: Database):

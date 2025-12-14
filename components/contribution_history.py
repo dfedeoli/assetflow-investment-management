@@ -172,7 +172,7 @@ def _render_by_asset(db: Database, contributions: list):
             df = pd.DataFrame(timeline_data)
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-            # Get latest position to show current value
+            # Get all positions from latest date to show current value
             latest_positions = db.get_latest_positions()
             current_position = next((pos for pos in latest_positions if pos.name == asset_name), None)
 
