@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Google Drive Authentication Error**: Fixed `invalid_grant: Bad Request` error when refresh token expires
+  - When `creds.refresh()` fails (token expired, revoked, or password changed), now deletes invalid `token.pickle` and triggers fresh OAuth flow
+  - User can now re-authenticate instead of being stuck with error message
+  - Common scenario: OAuth consent screen in "Testing" mode causes tokens to expire after 7 days
+  - Fixed in `utils/gdrive_backup.py:74-84`
+
+- **Deleted Assets Reappearing in Dashboards**: Fixed bug where assets removed in "Atualizar Posições" continued to appear in all dashboards
+  - Root cause: Old approach queried the most recent position for each unique asset across ALL dates, so removed assets would reappear from historical records
+  - Changed data model to use **complete snapshots per date**: Each date now contains ALL assets with their current values
+  - When "Registrar Contribuição" saves:
+    - Gets all positions from latest date (complete snapshot)
+    - Updates only assets that received contributions
+    - Saves ALL positions to the contribution date (preserving complete snapshot)
+    - Assets not in the snapshot are naturally excluded (removed assets disappear)
+  - Modified `_render_record_contribution()` in `components/upload.py:603-723`:
+    - Groups contributions by date
+    - For each date, creates complete portfolio snapshot
+    - Updates contributed assets with new values
+    - Saves all positions (including unchanged ones) to maintain complete snapshot
+  - Updated dashboard and history components to use latest complete snapshots
+  - Result: Removed assets no longer appear because they're not in the latest complete snapshot, while historical views remain accurate
+
+### Added
+- **Batch Contribution Registration**: Enhanced contribution recording with ability to register multiple contributions at once:
+  - Changed workflow from immediate registration to batch mode:
+    - "➕ Adicionar à Lista" button adds contributions to batch
+    - Form auto-resets after each addition (using dynamic form key)
+    - Batch preview table shows all pending contributions with summary metrics
+    - Individual remove buttons (🗑️) for each batch item
+    - "💾 Registrar Todas" processes entire batch in one transaction
+    - "🗑️ Limpar Lista" clears all pending contributions
+  - Category filter improvements:
+    - "🔄 Resetar" button to quickly return to "Todas as Categorias"
+    - Explicit widget key prevents filter state conflicts
+  - Improved error handling: shows success count and individual errors per contribution
+  - Session state variables: `contribution_batch`, `contribution_form_key`
+  - Implementation: `components/upload.py:394-723`
+
 ### Added
 - **AI-Powered PDF/Image Upload**: New upload method using OpenAI Vision API to automatically extract investment positions from documents:
   - New "Upload - PDF/Imagem (AI)" tab in Gerenciar Posições section
