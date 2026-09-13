@@ -8,7 +8,13 @@ from datetime import datetime
 from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 
-from .models import Position, AssetMapping, TargetAllocation, SubLabelMapping, SubLabelTarget, AnnualIncomeEntry, PGBLYearSettings, Contribution
+from .models import Position, AssetMapping, TargetAllocation, SubLabelMapping, SubLabelTarget, AnnualIncomeEntry, PGBLYearSettings, Contribution, AssetCategoryTarget
+
+# Fixed category names — enforced at the application layer
+FIXED_CATEGORIES = ["Estabilidade", "Diversificação", "Valorização", "Antifragilidade"]
+PORTFOLIO_INVESTIMENTOS = "investimentos"
+PORTFOLIO_PREVIDENCIA = "previdencia"
+ALL_PORTFOLIOS = [PORTFOLIO_INVESTIMENTOS, PORTFOLIO_PREVIDENCIA]
 
 
 class Database:
@@ -36,6 +42,7 @@ class Database:
                 sub_category TEXT NOT NULL,
                 custom_label TEXT,
                 sub_label TEXT,
+                portfolio TEXT NOT NULL DEFAULT 'investimentos',
                 date TEXT NOT NULL,
                 invested_value REAL,
                 percentage REAL,
@@ -51,20 +58,23 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 asset_name TEXT UNIQUE NOT NULL,
                 custom_label TEXT NOT NULL,
+                portfolio TEXT NOT NULL DEFAULT 'investimentos',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
-        # Target allocations table
+        # Target allocations table — unique on (custom_label, portfolio)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS target_allocations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                custom_label TEXT UNIQUE NOT NULL,
+                custom_label TEXT NOT NULL,
+                portfolio TEXT NOT NULL DEFAULT 'investimentos',
                 target_percentage REAL NOT NULL,
                 reserve_amount REAL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(custom_label, portfolio)
             )
         """)
 
@@ -136,13 +146,31 @@ class Database:
             )
         """)
 
+        # Asset category targets — per-asset target % within a category
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS asset_category_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_name TEXT NOT NULL,
+                category_name TEXT NOT NULL,
+                portfolio TEXT NOT NULL DEFAULT 'investimentos',
+                target_pct REAL NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(asset_name, category_name, portfolio)
+            )
+        """)
+
         # Create indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_date ON positions(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_label ON positions(custom_label)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_name ON positions(name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_portfolio ON positions(portfolio)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_sub_label ON positions(sub_label)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mappings_portfolio ON asset_mappings(portfolio)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_targets_portfolio ON target_allocations(portfolio)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sub_label_mappings_parent ON sub_label_mappings(parent_label)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sub_label_targets_parent ON sub_label_targets(parent_label)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_category ON asset_category_targets(category_name, portfolio)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_income_entries_year ON annual_income_entries(year)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_income_entries_year_month ON annual_income_entries(year, month)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_pgbl_year_settings_year ON pgbl_year_settings(year)")
@@ -156,35 +184,36 @@ class Database:
         self.conn.commit()
 
     def _initialize_default_labels(self, cursor):
-        """Initialize default custom labels if they don't exist"""
-        default_labels = [
-            {
-                'custom_label': 'Previdência',
-                'target_percentage': 0.0,
-                'reserve_amount': None
-            },
-            {
-                'custom_label': 'Segurança',
-                'target_percentage': 0.0,
-                'reserve_amount': None
-            }
+        """Seed all fixed categories for both portfolios (idempotent)."""
+        # 4 categories for investimentos portfolio
+        investimentos_labels = [
+            {'custom_label': cat, 'portfolio': PORTFOLIO_INVESTIMENTOS, 'target_percentage': 0.0, 'reserve_amount': None}
+            for cat in FIXED_CATEGORIES
+        ]
+        # Segurança — investimentos only, managed by reserve amount
+        investimentos_labels.append(
+            {'custom_label': 'Segurança', 'portfolio': PORTFOLIO_INVESTIMENTOS, 'target_percentage': 0.0, 'reserve_amount': None}
+        )
+        # 4 categories for previdencia portfolio
+        previdencia_labels = [
+            {'custom_label': cat, 'portfolio': PORTFOLIO_PREVIDENCIA, 'target_percentage': 0.0, 'reserve_amount': None}
+            for cat in FIXED_CATEGORIES
         ]
 
-        for label_data in default_labels:
-            # Check if label already exists
+        for label_data in investimentos_labels + previdencia_labels:
             cursor.execute(
-                "SELECT COUNT(*) as count FROM target_allocations WHERE custom_label = ?",
-                (label_data['custom_label'],)
+                "SELECT COUNT(*) as count FROM target_allocations WHERE custom_label = ? AND portfolio = ?",
+                (label_data['custom_label'], label_data['portfolio'])
             )
             exists = cursor.fetchone()['count'] > 0
 
-            # Insert only if it doesn't exist
             if not exists:
                 cursor.execute("""
-                    INSERT INTO target_allocations (custom_label, target_percentage, reserve_amount)
-                    VALUES (?, ?, ?)
+                    INSERT INTO target_allocations (custom_label, portfolio, target_percentage, reserve_amount)
+                    VALUES (?, ?, ?, ?)
                 """, (
                     label_data['custom_label'],
+                    label_data['portfolio'],
                     label_data['target_percentage'],
                     label_data['reserve_amount']
                 ))
@@ -195,22 +224,17 @@ class Database:
         """Add a new position to the database"""
         cursor = self.conn.cursor()
 
-        # Check if there's a mapping for this asset
+        # Check if there's a mapping for this asset; inherit portfolio and custom_label
         mapping = self.get_asset_mapping(position.name)
         if mapping:
             position.custom_label = mapping.custom_label
-
-        # Check if there's a sub-label mapping for this asset
-        if position.custom_label:
-            sub_mapping = self.get_sub_label_mapping(position.name, position.custom_label)
-            if sub_mapping:
-                position.sub_label = sub_mapping.sub_label
+            position.portfolio = mapping.portfolio
 
         cursor.execute("""
             INSERT INTO positions (
-                name, value, main_category, sub_category, custom_label, sub_label,
+                name, value, main_category, sub_category, custom_label, sub_label, portfolio,
                 date, invested_value, percentage, quantity, additional_info
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             position.name,
             position.value,
@@ -218,6 +242,7 @@ class Database:
             position.sub_category,
             position.custom_label,
             position.sub_label,
+            position.portfolio,
             position.date.isoformat() if position.date else datetime.now().isoformat(),
             position.invested_value,
             position.percentage,
@@ -241,17 +266,31 @@ class Database:
 
         return [self._row_to_position(row) for row in cursor.fetchall()]
 
-    def get_latest_positions(self) -> List[Position]:
-        """Get positions from the most recent date"""
+    def get_latest_positions(self, portfolio: Optional[str] = None) -> List[Position]:
+        """Get positions from the most recent date, optionally filtered by portfolio."""
         cursor = self.conn.cursor()
 
-        cursor.execute("""
-            SELECT * FROM positions
-            WHERE date(date) = (SELECT date(date) FROM positions ORDER BY date DESC LIMIT 1)
-            ORDER BY value DESC
-        """)
+        if portfolio:
+            cursor.execute("""
+                SELECT * FROM positions
+                WHERE portfolio = ?
+                AND date(date) = (
+                    SELECT date(date) FROM positions WHERE portfolio = ? ORDER BY date DESC LIMIT 1
+                )
+                ORDER BY value DESC
+            """, (portfolio, portfolio))
+        else:
+            cursor.execute("""
+                SELECT * FROM positions
+                WHERE date(date) = (SELECT date(date) FROM positions ORDER BY date DESC LIMIT 1)
+                ORDER BY value DESC
+            """)
 
         return [self._row_to_position(row) for row in cursor.fetchall()]
+
+    def get_positions_by_portfolio(self, portfolio: str) -> List[Position]:
+        """Get latest positions for a specific portfolio."""
+        return self.get_latest_positions(portfolio=portfolio)
 
     def get_all_dates(self) -> List[datetime]:
         """Get all unique dates with positions"""
@@ -301,26 +340,27 @@ class Database:
 
     # ==================== Asset Mapping Operations ====================
 
-    def add_or_update_mapping(self, asset_name: str, custom_label: str) -> int:
+    def add_or_update_mapping(self, asset_name: str, custom_label: str, portfolio: str = PORTFOLIO_INVESTIMENTOS) -> int:
         """Add or update an asset mapping"""
         cursor = self.conn.cursor()
 
         cursor.execute("""
-            INSERT INTO asset_mappings (asset_name, custom_label, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO asset_mappings (asset_name, custom_label, portfolio, updated_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(asset_name) DO UPDATE SET
                 custom_label = excluded.custom_label,
+                portfolio = excluded.portfolio,
                 updated_at = excluded.updated_at
-        """, (asset_name, custom_label, datetime.now().isoformat()))
+        """, (asset_name, custom_label, portfolio, datetime.now().isoformat()))
 
         self.conn.commit()
 
         # Update all positions with this asset name
         cursor.execute("""
             UPDATE positions
-            SET custom_label = ?
+            SET custom_label = ?, portfolio = ?
             WHERE name = ?
-        """, (custom_label, asset_name))
+        """, (custom_label, portfolio, asset_name))
 
         self.conn.commit()
 
@@ -374,44 +414,64 @@ class Database:
 
     # ==================== Target Allocation Operations ====================
 
-    def add_or_update_target(self, custom_label: str, target_percentage: float, reserve_amount: float = None) -> int:
-        """Add or update a target allocation"""
+    def add_or_update_target(self, custom_label: str, portfolio: str, target_percentage: float, reserve_amount: float = None) -> int:
+        """Add or update a target allocation for a (category, portfolio) pair."""
+        # Segurança is always 0% — managed by reserve amount only
+        if custom_label == "Segurança":
+            target_percentage = 0.0
         cursor = self.conn.cursor()
 
         cursor.execute("""
-            INSERT INTO target_allocations (custom_label, target_percentage, reserve_amount, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(custom_label) DO UPDATE SET
+            INSERT INTO target_allocations (custom_label, portfolio, target_percentage, reserve_amount, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(custom_label, portfolio) DO UPDATE SET
                 target_percentage = excluded.target_percentage,
                 reserve_amount = excluded.reserve_amount,
                 updated_at = excluded.updated_at
-        """, (custom_label, target_percentage, reserve_amount, datetime.now().isoformat()))
+        """, (custom_label, portfolio, target_percentage, reserve_amount, datetime.now().isoformat()))
 
         self.conn.commit()
         return cursor.lastrowid
 
-    def get_target(self, custom_label: str) -> Optional[TargetAllocation]:
-        """Get target allocation for a label"""
+    def get_target(self, custom_label: str, portfolio: str = PORTFOLIO_INVESTIMENTOS) -> Optional[TargetAllocation]:
+        """Get target allocation for a (label, portfolio) pair."""
         cursor = self.conn.cursor()
 
-        cursor.execute("SELECT * FROM target_allocations WHERE custom_label = ?", (custom_label,))
+        cursor.execute(
+            "SELECT * FROM target_allocations WHERE custom_label = ? AND portfolio = ?",
+            (custom_label, portfolio)
+        )
         row = cursor.fetchone()
 
         return self._row_to_target(row) if row else None
 
     def get_all_targets(self) -> List[TargetAllocation]:
-        """Get all target allocations"""
+        """Get all target allocations across all portfolios."""
         cursor = self.conn.cursor()
 
-        cursor.execute("SELECT * FROM target_allocations ORDER BY custom_label")
+        cursor.execute("SELECT * FROM target_allocations ORDER BY portfolio, custom_label")
 
         return [self._row_to_target(row) for row in cursor.fetchall()]
 
-    def delete_target(self, custom_label: str) -> bool:
-        """Delete a target allocation"""
+    def get_targets_by_portfolio(self, portfolio: str) -> List[TargetAllocation]:
+        """Get all target allocations for a specific portfolio."""
         cursor = self.conn.cursor()
 
-        cursor.execute("DELETE FROM target_allocations WHERE custom_label = ?", (custom_label,))
+        cursor.execute(
+            "SELECT * FROM target_allocations WHERE portfolio = ? ORDER BY custom_label",
+            (portfolio,)
+        )
+
+        return [self._row_to_target(row) for row in cursor.fetchall()]
+
+    def delete_target(self, custom_label: str, portfolio: str = PORTFOLIO_INVESTIMENTOS) -> bool:
+        """Delete a target allocation."""
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            "DELETE FROM target_allocations WHERE custom_label = ? AND portfolio = ?",
+            (custom_label, portfolio)
+        )
         self.conn.commit()
 
         return cursor.rowcount > 0
@@ -420,11 +480,14 @@ class Database:
 
     def _row_to_position(self, row: sqlite3.Row) -> Position:
         """Convert database row to Position object"""
-        # Check if sub_label column exists in the row
         try:
             sub_label = row['sub_label']
         except (KeyError, IndexError):
             sub_label = None
+        try:
+            portfolio = row['portfolio']
+        except (KeyError, IndexError):
+            portfolio = PORTFOLIO_INVESTIMENTOS
 
         return Position(
             id=row['id'],
@@ -434,6 +497,7 @@ class Database:
             sub_category=row['sub_category'],
             custom_label=row['custom_label'],
             sub_label=sub_label,
+            portfolio=portfolio,
             date=datetime.fromisoformat(row['date']),
             invested_value=row['invested_value'],
             percentage=row['percentage'],
@@ -443,17 +507,21 @@ class Database:
 
     def _row_to_mapping(self, row: sqlite3.Row) -> AssetMapping:
         """Convert database row to AssetMapping object"""
+        try:
+            portfolio = row['portfolio']
+        except (KeyError, IndexError):
+            portfolio = PORTFOLIO_INVESTIMENTOS
         return AssetMapping(
             id=row['id'],
             asset_name=row['asset_name'],
             custom_label=row['custom_label'],
+            portfolio=portfolio,
             created_at=datetime.fromisoformat(row['created_at']),
             updated_at=datetime.fromisoformat(row['updated_at'])
         )
 
     def _row_to_target(self, row: sqlite3.Row) -> TargetAllocation:
         """Convert database row to TargetAllocation object"""
-        # Check if reserve_amount column exists
         try:
             reserve_amount = row['reserve_amount']
         except (KeyError, IndexError):
@@ -643,6 +711,57 @@ class Database:
             target_percentage=row['target_percentage'],
             created_at=datetime.fromisoformat(row['created_at']),
             updated_at=datetime.fromisoformat(row['updated_at'])
+        )
+
+    # ==================== Asset Category Target Operations ====================
+
+    def add_or_update_asset_category_target(self, asset_name: str, category_name: str, portfolio: str, target_pct: float) -> int:
+        """Set a per-asset target % within a category."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO asset_category_targets (asset_name, category_name, portfolio, target_pct, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(asset_name, category_name, portfolio) DO UPDATE SET
+                target_pct = excluded.target_pct,
+                updated_at = excluded.updated_at
+        """, (asset_name, category_name, portfolio, target_pct, datetime.now().isoformat()))
+
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_asset_category_targets(self, category_name: str, portfolio: str) -> List[AssetCategoryTarget]:
+        """Get all per-asset targets for a (category, portfolio) pair."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM asset_category_targets
+            WHERE category_name = ? AND portfolio = ?
+            ORDER BY asset_name
+        """, (category_name, portfolio))
+
+        return [self._row_to_asset_category_target(row) for row in cursor.fetchall()]
+
+    def delete_asset_category_target(self, asset_name: str, category_name: str, portfolio: str) -> bool:
+        """Delete a per-asset target."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            DELETE FROM asset_category_targets
+            WHERE asset_name = ? AND category_name = ? AND portfolio = ?
+        """, (asset_name, category_name, portfolio))
+        self.conn.commit()
+
+        return cursor.rowcount > 0
+
+    def _row_to_asset_category_target(self, row: sqlite3.Row) -> AssetCategoryTarget:
+        """Convert database row to AssetCategoryTarget object"""
+        return AssetCategoryTarget(
+            id=row['id'],
+            asset_name=row['asset_name'],
+            category_name=row['category_name'],
+            portfolio=row['portfolio'],
+            target_pct=row['target_pct']
         )
 
     def get_summary_statistics(self) -> Dict:
@@ -849,6 +968,7 @@ class Database:
             sub_category=previous_position.sub_category,
             custom_label=previous_position.custom_label,
             sub_label=previous_position.sub_label,
+            portfolio=previous_position.portfolio,
             date=contribution_date,
             invested_value=new_invested_value,
             percentage=previous_position.percentage,

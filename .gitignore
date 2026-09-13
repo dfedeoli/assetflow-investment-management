@@ -22,6 +22,11 @@ env/
 *.xlsx
 *.xls
 *.csv
+*.pdf
+*.ofx
+*.png
+*.jpg
+*.jpeg
 
 # Environment and secrets
 .env

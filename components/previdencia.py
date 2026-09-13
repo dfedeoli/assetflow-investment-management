@@ -1,30 +1,34 @@
 """
-Previdencia specialized component with sub-classification
+Previdência portfolio component — completely separate from the Investimentos portfolio.
+Uses the same 4 fixed categories (Estabilidade, Diversificação, Valorização, Antifragilidade)
+with independent targets and rebalancing.
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
-from database.db import Database
+from database.db import Database, FIXED_CATEGORIES, PORTFOLIO_PREVIDENCIA
 from database.models import AnnualIncomeEntry, PGBLYearSettings
 from utils.calculations import PortfolioCalculator
+from utils.ui_helpers import currency_input
 from utils import pgbl_tax_calculator as pgbl_calc
 
 
 def render_previdencia_component(db: Database):
-    """Render Previdencia specialized dashboard"""
+    """Render Previdência specialized dashboard"""
     st.header("💼 Previdência Privada")
 
-    # Get Previdencia positions
-    positions = db.get_positions_by_custom_label("Previdência")
+    positions = db.get_latest_positions(portfolio=PORTFOLIO_PREVIDENCIA)
 
     if not positions:
         st.info("📭 Nenhuma posição de Previdência encontrada.")
-        st.write("Classifique seus ativos de previdência na aba 'Classificação de Ativos' primeiro.")
+        st.write(
+            "Ao importar ou adicionar posições, selecione **Previdência** como carteira. "
+            "Se você já tinha ativos classificados como 'Previdência', eles precisam ser reclassificados nas categorias abaixo."
+        )
         return
 
-    # Display summary
     total_value = sum(p.value for p in positions)
     position_date = positions[0].date
 
@@ -36,421 +40,363 @@ def render_previdencia_component(db: Database):
     with col3:
         st.metric("Total de Posições", len(positions))
 
+    # Warn about uncategorized positions
+    uncategorized = [p for p in positions if not p.custom_label]
+    if uncategorized:
+        st.warning(
+            f"⚠️ **{len(uncategorized)} posição(ões) sem categoria** — "
+            "classifique-as na aba 'Classificação' para incluí-las na análise."
+        )
+
     st.divider()
 
-    # Tabs for different views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Visão Geral",
-        "Sub-Classificação",
+        "Classificação",
         "Definir Metas",
+        "Metas por Ativo",
         "Rebalanceamento",
         "📊 Planejamento PGBL"
     ])
 
     with tab1:
-        _render_overview(positions, db)
+        _render_overview(positions, total_value)
 
     with tab2:
-        _render_sub_classification(positions, db)
+        _render_classification(positions, db)
 
     with tab3:
         _render_target_management(db)
 
     with tab4:
-        _render_rebalancing(positions, db, total_value)
+        _render_asset_targets(db)
 
     with tab5:
-        _render_pgbl_planning(db)
+        classified = [p for p in positions if p.custom_label]
+        _render_rebalancing(classified, db, total_value)
+
+    with tab6:
+        _render_pgbl_planning(db, positions)
 
 
-def _render_overview(positions, db: Database):
-    """Render overview of Previdencia positions"""
-    st.subheader("Distribuição da Previdência")
+def _render_overview(positions, total_value: float):
+    """Overview of Previdência distribution by category."""
+    st.subheader("Distribuição por Categoria")
 
-    # Check if we have sub-labels
-    has_sub_labels = any(p.sub_label for p in positions)
+    classified = [p for p in positions if p.custom_label]
+    if not classified:
+        st.warning("⚠️ Classifique seus ativos de previdência na aba 'Classificação'.")
+        return
 
-    if has_sub_labels:
-        # Group by sub-label
-        sub_allocation = {}
-        for p in positions:
-            key = p.sub_label if p.sub_label else "Não Classificado"
-            if key not in sub_allocation:
-                sub_allocation[key] = 0.0
-            sub_allocation[key] += p.value
+    by_cat = {}
+    for p in classified:
+        by_cat.setdefault(p.custom_label, 0.0)
+        by_cat[p.custom_label] += p.value
 
-        total = sum(sub_allocation.values())
+    cat_total = sum(by_cat.values())
 
-        # Create DataFrame
-        alloc_data = []
-        for sub_label, value in sorted(sub_allocation.items(), key=lambda x: x[1], reverse=True):
-            pct = (value / total * 100) if total > 0 else 0
-            alloc_data.append({
-                'Sub-Categoria': sub_label,
-                'Valor': value,
-                'Valor (Formatado)': f"R$ {value:,.2f}",
-                'Porcentagem': pct,
-                'Porcentagem (Formatada)': f"{pct:.1f}%"
-            })
+    fig = go.Figure(data=[go.Pie(
+        labels=list(by_cat.keys()),
+        values=list(by_cat.values()),
+        hole=0.40,
+        hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>',
+        textinfo='label+percent',
+        textposition='outside'
+    )])
+    fig.update_layout(
+        annotations=[dict(
+            text=f'<b>Total</b><br>R$ {cat_total:,.0f}',
+            x=0.5, y=0.5, font_size=16, showarrow=False, align='center'
+        )],
+        showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05),
+        height=500,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-        df = pd.DataFrame(alloc_data)
+    alloc_data = []
+    for cat, val in sorted(by_cat.items(), key=lambda x: x[1], reverse=True):
+        pct = val / cat_total * 100 if cat_total > 0 else 0
+        alloc_data.append({'Categoria': cat, 'Valor': f"R$ {val:,.2f}", '%': f"{pct:.1f}%"})
+    st.dataframe(alloc_data, use_container_width=True, hide_index=True)
 
-        # Display as donut chart
-        total_value = df['Valor'].sum()
-
-        fig = go.Figure(data=[go.Pie(
-            labels=df['Sub-Categoria'],
-            values=df['Valor'],
-            hole=0.40,  # Creates donut effect
-            hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>',
-            textinfo='label+percent',
-            textposition='outside'
-        )])
-
-        fig.update_layout(
-            annotations=[dict(
-                text=f'<b>Total</b><br>R$ {total_value:,.0f}',
-                x=0.5, y=0.5,
-                font_size=16,
-                showarrow=False,
-                align='center'
-            )],
-            showlegend=True,
-            legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05),
-            height=500,
-            margin=dict(l=20, r=20, t=40, b=20)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Display as table
-        st.dataframe(
-            df[['Sub-Categoria', 'Valor (Formatado)', 'Porcentagem (Formatada)']].rename(columns={
-                'Valor (Formatado)': 'Valor',
-                'Porcentagem (Formatada)': '%'
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.warning("⚠️ Sub-classifique seus ativos de previdência na aba 'Sub-Classificação'.")
-
-    # Show all positions
     st.divider()
-    st.subheader("Todas as Posições de Previdência")
+    st.subheader("Todas as Posições")
 
-    details_data = []
+    details = []
     for p in sorted(positions, key=lambda x: x.value, reverse=True):
         row = {
             'Nome': p.name,
+            'Categoria': p.custom_label or "Não Classificado",
             'Valor': f"R$ {p.value:,.2f}",
-            'Sub-Categoria': p.sub_label if p.sub_label else "Não Classificado"
         }
-
         if p.invested_value:
             gain = p.value - p.invested_value
-            gain_pct = (gain / p.invested_value * 100) if p.invested_value > 0 else 0
+            gain_pct = gain / p.invested_value * 100 if p.invested_value > 0 else 0
             row['Investido'] = f"R$ {p.invested_value:,.2f}"
             row['Ganho'] = f"R$ {gain:+,.2f} ({gain_pct:+.1f}%)"
-
-        details_data.append(row)
-
-    st.dataframe(details_data, use_container_width=True, hide_index=True)
+        details.append(row)
+    st.dataframe(details, use_container_width=True, hide_index=True)
 
 
-def _render_sub_classification(positions, db: Database):
-    """Render sub-classification management"""
-    st.subheader("Sub-Classificação de Previdência")
+def _render_classification(positions, db: Database):
+    """Classify Previdência assets into the 4 fixed categories."""
+    st.subheader("Classificar Ativos de Previdência")
+    st.info(
+        "Cada ativo de previdência deve pertencer a uma das 4 categorias. "
+        "A classificação aqui é independente da carteira de Investimentos."
+    )
 
-    st.markdown("""
-    Classifique seus ativos de previdência em subcategorias para melhor análise.
-    Por exemplo: Conservadora, Moderada, Agressiva, etc.
-    """)
+    uncategorized = [p for p in positions if not p.custom_label]
+    all_assets = sorted(set(p.name for p in positions))
 
-    # Get unmapped sub-assets
-    unmapped_assets = db.get_unmapped_sub_assets("Previdência")
+    if uncategorized:
+        uncategorized_names = sorted(set(p.name for p in uncategorized))
+        st.warning(f"⚠️ {len(uncategorized_names)} ativo(s) sem categoria")
 
-    # Get existing sub-label mappings
-    existing_mappings = db.get_all_sub_label_mappings("Previdência")
-    existing_sub_labels = sorted(set(m.sub_label for m in existing_mappings))
+        with st.form("prev_classify_form"):
+            asset = st.selectbox("Ativo", uncategorized_names)
+            category = st.selectbox("Categoria", FIXED_CATEGORIES)
+            submitted = st.form_submit_button("💾 Classificar", type="primary")
 
-    if unmapped_assets:
-        st.write(f"**{len(unmapped_assets)} ativos precisam de sub-classificação**")
+            if submitted and asset and category:
+                db.add_or_update_mapping(asset, category, portfolio=PORTFOLIO_PREVIDENCIA)
+                st.success(f"✓ '{asset}' classificado como '{category}' (Previdência)")
+                st.rerun()
 
-        # Quick classification form
-        with st.form("quick_sub_classify"):
-            st.write("**Classificação Rápida**")
-
-            asset = st.selectbox("Selecione o Ativo", unmapped_assets)
-
-            col1, col2 = st.columns([2, 1])
-
-            with col1:
-                # Allow selecting existing or creating new
-                label_option = st.radio(
-                    "Opção",
-                    ["Usar Sub-Categoria Existente", "Criar Nova Sub-Categoria"],
-                    horizontal=True
-                )
-
-                if label_option == "Usar Sub-Categoria Existente":
-                    if existing_sub_labels:
-                        sub_label = st.selectbox("Sub-Categoria", existing_sub_labels)
-                    else:
-                        st.warning("Nenhuma sub-categoria existente. Crie uma nova.")
-                        sub_label = st.text_input("Nova Sub-Categoria")
-                else:
-                    sub_label = st.text_input(
-                        "Nome da Nova Sub-Categoria",
-                        placeholder="Ex: Conservadora, Moderada, Agressiva"
-                    )
-
-            with col2:
-                st.write("")  # Spacing
-                st.write("")  # Spacing
-                submitted = st.form_submit_button("💾 Salvar Sub-Classificação", type="primary")
-
-            if submitted:
-                if asset and sub_label:
-                    db.add_or_update_sub_label_mapping(asset, "Previdência", sub_label)
-                    st.success(f"✓ '{asset}' sub-classificado como '{sub_label}'")
+        # Bulk
+        with st.expander("📦 Classificar múltiplos ativos"):
+            bulk_cat = st.selectbox("Categoria", FIXED_CATEGORIES, key="prev_bulk_cat")
+            selected = st.multiselect("Ativos", uncategorized_names, key="prev_bulk_assets")
+            if st.button("💾 Classificar Selecionados", type="secondary"):
+                if bulk_cat and selected:
+                    for a in selected:
+                        db.add_or_update_mapping(a, bulk_cat, portfolio=PORTFOLIO_PREVIDENCIA)
+                    st.success(f"✓ {len(selected)} ativos classificados!")
                     st.rerun()
-                else:
-                    st.error("Preencha todos os campos.")
-
-        # Bulk classification
-        st.divider()
-        with st.expander("📦 Sub-classificar múltiplos ativos de uma vez"):
-            bulk_sub_label = st.text_input(
-                "Sub-Categoria para Aplicar",
-                placeholder="Ex: Conservadora",
-                key="bulk_sub_label"
-            )
-
-            selected_assets = st.multiselect(
-                "Selecione os Ativos",
-                unmapped_assets,
-                key="bulk_sub_assets"
-            )
-
-            if st.button("💾 Sub-classificar Selecionados", type="secondary"):
-                if bulk_sub_label and selected_assets:
-                    for asset in selected_assets:
-                        db.add_or_update_sub_label_mapping(asset, "Previdência", bulk_sub_label)
-                    st.success(f"✓ {len(selected_assets)} ativos sub-classificados!")
-                    st.rerun()
-                else:
-                    st.error("Selecione ativos e defina uma sub-categoria.")
     else:
-        st.success("✓ Todos os ativos de previdência estão sub-classificados!")
+        st.success("✓ Todos os ativos de previdência estão classificados!")
 
-    # Show existing mappings
-    if existing_mappings:
+    # Show existing classifications
+    classified_mappings = [m for m in db.get_all_mappings() if m.portfolio == PORTFOLIO_PREVIDENCIA and m.custom_label]
+    if classified_mappings:
         st.divider()
-        st.subheader("Sub-Classificações Existentes")
+        st.subheader("Classificações Existentes")
 
-        # Group by sub-label
-        by_sub_label = {}
-        for mapping in existing_mappings:
-            if mapping.sub_label not in by_sub_label:
-                by_sub_label[mapping.sub_label] = []
-            by_sub_label[mapping.sub_label].append(mapping)
+        by_cat = {}
+        for m in classified_mappings:
+            by_cat.setdefault(m.custom_label, []).append(m)
 
-        for sub_label, maps in sorted(by_sub_label.items()):
-            with st.expander(f"**{sub_label}** ({len(maps)} ativos)"):
+        for cat, maps in sorted(by_cat.items()):
+            with st.expander(f"**{cat}** ({len(maps)} ativos)"):
                 for mapping in maps:
-                    col1, col2 = st.columns([4, 1])
-
+                    col1, col2, col3 = st.columns([3, 2, 1])
                     with col1:
                         st.write(mapping.asset_name)
-
                     with col2:
-                        if st.button("🗑️", key=f"del_sub_{mapping.id}", help="Remover sub-classificação"):
-                            db.delete_sub_label_mapping(mapping.asset_name, "Previdência")
+                        new_cat = st.selectbox(
+                            "Categoria",
+                            FIXED_CATEGORIES,
+                            index=FIXED_CATEGORIES.index(mapping.custom_label) if mapping.custom_label in FIXED_CATEGORIES else 0,
+                            key=f"prev_edit_{mapping.id}",
+                            label_visibility="collapsed"
+                        )
+                        if new_cat != mapping.custom_label:
+                            if st.button("Salvar", key=f"prev_save_{mapping.id}"):
+                                db.add_or_update_mapping(mapping.asset_name, new_cat, portfolio=PORTFOLIO_PREVIDENCIA)
+                                st.rerun()
+                    with col3:
+                        if st.button("🗑️", key=f"prev_del_{mapping.id}", help="Remover classificação"):
+                            db.delete_mapping(mapping.asset_name)
                             st.rerun()
 
 
 def _render_target_management(db: Database):
-    """Render sub-label target management"""
-    st.subheader("Metas de Sub-Alocação")
-
+    """Set allocation targets for the Previdência portfolio."""
+    st.subheader("Definir Metas — Previdência")
     st.info(
-        "⚠️ **Importante:** Defina as porcentagens ideais dentro da sua Previdência. "
-        "A soma deve ser 100% (referente ao total de Previdência, não ao portfólio total)."
+        "Defina a porcentagem alvo para cada categoria **dentro da Previdência**. "
+        "Deve somar 100%. Independente das metas de Investimentos."
     )
 
-    # Get all sub-labels from mappings
-    mappings = db.get_all_sub_label_mappings("Previdência")
-    all_sub_labels = sorted(set(m.sub_label for m in mappings))
+    targets = db.get_targets_by_portfolio(PORTFOLIO_PREVIDENCIA)
+    targets_dict = {t.custom_label: t.target_percentage for t in targets}
 
-    if not all_sub_labels:
-        st.warning("⚠️ Sub-classifique seus ativos primeiro antes de definir metas.")
-        return
+    with st.form("prev_target_form"):
+        st.write("Porcentagem alvo por categoria:")
 
-    # Get existing targets
-    existing_targets = db.get_all_sub_label_targets("Previdência")
-    targets_dict = {t.sub_label: t.target_percentage for t in existing_targets}
+        inputs = {}
+        total_pct = 0.0
 
-    # Form to add/edit targets
-    st.subheader("Definir Metas")
-
-    with st.form("sub_target_form"):
-        st.write("Defina a porcentagem alvo para cada sub-categoria:")
-
-        targets_input = {}
-        total_percentage = 0
-
-        # Create input for each sub-label
-        for sub_label in all_sub_labels:
-            current_target = targets_dict.get(sub_label, 0.0)
-            targets_input[sub_label] = st.number_input(
-                f"{sub_label} (%)",
+        for cat in FIXED_CATEGORIES:
+            current = targets_dict.get(cat, 0.0)
+            inputs[cat] = st.number_input(
+                f"{cat} (%)",
                 min_value=0.0,
                 max_value=100.0,
-                value=current_target,
+                value=current,
                 step=1.0,
-                key=f"sub_target_{sub_label}"
+                key=f"prev_target_{cat}"
             )
-            total_percentage += targets_input[sub_label]
+            total_pct += inputs[cat]
 
-        # Show total
-        if total_percentage != 100:
-            st.warning(f"⚠️ Total: {total_percentage:.1f}% (deve somar 100%)")
+        if abs(total_pct - 100.0) < 0.01:
+            st.success(f"✓ Total: {total_pct:.1f}%")
         else:
-            st.success(f"✓ Total: {total_percentage:.1f}%")
+            st.warning(f"⚠️ Total: {total_pct:.1f}% (deve somar 100%)")
 
         submitted = st.form_submit_button("💾 Salvar Metas", type="primary")
 
         if submitted:
-            if abs(total_percentage - 100.0) > 0.1:
-                st.error("A soma das porcentagens deve ser 100%!")
+            if abs(total_pct - 100.0) > 0.1:
+                st.error("A soma deve ser 100%!")
             else:
-                for sub_label, target_pct in targets_input.items():
-                    if target_pct > 0:  # Only save non-zero targets
-                        db.add_or_update_sub_label_target("Previdência", sub_label, target_pct)
-
-                st.success("✓ Metas salvas com sucesso!")
+                for cat, pct in inputs.items():
+                    db.add_or_update_target(cat, PORTFOLIO_PREVIDENCIA, pct)
+                st.success("✓ Metas salvas!")
                 st.rerun()
 
-    # Display current targets
-    if existing_targets:
+    # Show current targets
+    active_targets = [t for t in targets if t.target_percentage > 0]
+    if active_targets:
         st.divider()
         st.subheader("Metas Atuais")
-
-        for target in sorted(existing_targets, key=lambda x: x.target_percentage, reverse=True):
-            col1, col2, col3 = st.columns([3, 2, 1])
-
+        for t in sorted(active_targets, key=lambda x: x.target_percentage, reverse=True):
+            col1, col2 = st.columns([3, 2])
             with col1:
-                st.write(target.sub_label)
-
+                st.write(t.custom_label)
             with col2:
-                st.write(f"{target.target_percentage:.1f}%")
-
-            with col3:
-                if st.button("🗑️", key=f"del_sub_target_{target.id}", help="Deletar meta"):
-                    db.delete_sub_label_target("Previdência", target.sub_label)
-                    st.rerun()
+                st.write(f"{t.target_percentage:.1f}%")
 
 
 def _render_rebalancing(positions, db: Database, total_value: float):
-    """Render rebalancing analysis for Previdencia"""
+    """Rebalancing analysis for the Previdência portfolio."""
     st.subheader("Rebalanceamento da Previdência")
 
-    # Check if we have targets
-    targets = db.get_all_sub_label_targets("Previdência")
+    targets = db.get_targets_by_portfolio(PORTFOLIO_PREVIDENCIA)
+    target_map = {t.custom_label: t.target_percentage for t in targets if t.target_percentage > 0}
 
-    if not targets:
-        st.warning("⚠️ Defina suas metas de sub-alocação primeiro na aba 'Definir Metas'.")
+    if not target_map:
+        st.warning("⚠️ Defina metas na aba 'Definir Metas' primeiro.")
         return
 
-    # Calculate current allocation by sub-label
+    if not positions:
+        st.warning("⚠️ Nenhuma posição classificada. Classifique seus ativos primeiro.")
+        return
+
     calc = PortfolioCalculator()
 
-    # Use sub_label for grouping
     current_allocation = {}
     for p in positions:
-        key = p.sub_label if p.sub_label else "Não Classificado"
-        if key not in current_allocation:
-            current_allocation[key] = 0.0
-        current_allocation[key] += p.value
+        current_allocation.setdefault(p.custom_label, 0.0)
+        current_allocation[p.custom_label] += p.value
 
-    # Get target allocations
-    target_allocations = {t.sub_label: t.target_percentage for t in targets}
-
-    # Input for additional investment
-    st.write("**Novo Investimento em Previdência**")
-    additional_investment = st.number_input(
+    additional = currency_input(
         "Valor adicional a investir na Previdência (R$)",
-        min_value=0.0,
-        value=0.0,
-        step=500.0,
-        help="Deixe em 0 para ver apenas o status atual"
+        key="prev_additional_investment",
+        initial_value=0.0
     )
 
-    # Create rebalancing plan
-    plan = calc.create_rebalancing_plan(
-        current_allocation,
-        target_allocations,
-        additional_investment
-    )
+    plan = calc.create_rebalancing_plan(current_allocation, target_map, additional)
 
-    # Display current vs target
     st.divider()
-    st.write("**Sub-Alocação Atual vs Meta**")
+    st.write("**Alocação Atual vs Meta**")
 
+    status_emoji = {'balanced': '✅', 'overweight': '⚠️', 'underweight': '🔴'}
     comparison_data = []
-    for analysis in plan.analyses:
-        status_emoji = {
-            'balanced': '✅',
-            'overweight': '⚠️',
-            'underweight': '🔴'
-        }
-
+    for a in plan.analyses:
         comparison_data.append({
-            'Status': status_emoji.get(analysis.status, ''),
-            'Sub-Categoria': analysis.label,
-            'Atual': f"{analysis.current_percentage:.1f}%",
-            'Meta': f"{analysis.target_percentage:.1f}%",
-            'Diferença': f"{analysis.difference_percentage:+.1f}%",
-            'Valor Atual': f"R$ {analysis.current_value:,.2f}",
-            'Ajuste Necessário': f"R$ {analysis.rebalance_amount:+,.2f}" if abs(analysis.rebalance_amount) > 1 else "✓"
+            'Status': status_emoji.get(a.status, ''),
+            'Categoria': a.label,
+            'Atual': f"{a.current_percentage:.1f}%",
+            'Meta': f"{a.target_percentage:.1f}%",
+            'Diferença': f"{a.difference_percentage:+.1f}%",
+            'Valor Atual': f"R$ {a.current_value:,.2f}",
+            'Ajuste Necessário': f"R$ {a.rebalance_amount:+,.2f}" if abs(a.rebalance_amount) > 1 else "✓"
         })
-
     st.dataframe(comparison_data, use_container_width=True, hide_index=True)
 
-    # Display suggestions
     if plan.suggestions:
         st.divider()
-        st.write("**Sugestões de Rebalanceamento**")
-
-        for suggestion in plan.suggestions:
-            if suggestion.startswith('\n'):
-                st.write(suggestion.strip())
-            elif suggestion.startswith('  -'):
-                st.write(suggestion)
+        st.write("**Sugestões**")
+        for s in plan.suggestions:
+            if s.startswith('\n'):
+                st.write(s.strip())
+            elif s.startswith('  -'):
+                st.write(s)
             else:
-                st.info(suggestion)
+                st.info(s)
 
-    # Summary metrics
     st.divider()
     col1, col2, col3 = st.columns(3)
-
     with col1:
-        balanced_count = sum(1 for a in plan.analyses if a.status == 'balanced')
-        st.metric("Sub-Categorias Balanceadas", f"{balanced_count}/{len(plan.analyses)}")
-
+        balanced = sum(1 for a in plan.analyses if a.status == 'balanced')
+        st.metric("Categorias Balanceadas", f"{balanced}/{len(plan.analyses)}")
     with col2:
-        if additional_investment > 0:
-            st.metric("Novo Total Previdência", f"R$ {plan.total_portfolio_value:,.2f}")
-        else:
-            st.metric("Total Previdência", f"R$ {total_value:,.2f}")
-
+        st.metric("Total Previdência", f"R$ {total_value:,.2f}")
     with col3:
-        max_deviation = max((abs(a.difference_percentage) for a in plan.analyses), default=0)
-        st.metric("Maior Desvio", f"{max_deviation:.1f}%")
+        max_dev = max((abs(a.difference_percentage) for a in plan.analyses), default=0)
+        st.metric("Maior Desvio", f"{max_dev:.1f}%")
 
 
-def _render_pgbl_planning(db: Database):
+def _render_asset_targets(db: Database):
+    """Set per-asset targets within each category for the Previdência portfolio."""
+    st.subheader("Metas por Ativo — Previdência")
+    st.info(
+        "Defina a porcentagem máxima que cada ativo pode representar dentro de sua categoria. "
+        "Útil para limitar posições concentradas."
+    )
+
+    category = st.selectbox("Categoria", FIXED_CATEGORIES, key="prev_act_category")
+
+    positions = db.get_latest_positions(portfolio=PORTFOLIO_PREVIDENCIA)
+    cat_positions = [p for p in positions if p.custom_label == category]
+
+    if not cat_positions:
+        st.info(f"Nenhuma posição classificada em '{category}' na Previdência.")
+        return
+
+    cat_total = sum(p.value for p in cat_positions)
+    existing_targets = {t.asset_name: t.target_pct for t in db.get_asset_category_targets(category, PORTFOLIO_PREVIDENCIA)}
+
+    st.write(f"**Ativos em {category}** (Total: R$ {cat_total:,.2f})")
+
+    updated = {}
+    for p in sorted(cat_positions, key=lambda x: x.value, reverse=True):
+        current_pct = p.value / cat_total * 100 if cat_total > 0 else 0
+        target_pct = existing_targets.get(p.name, 0.0)
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            st.write(f"**{p.name}**")
+            st.caption(f"Atual: {current_pct:.1f}%")
+        with col2:
+            updated[p.name] = st.number_input(
+                "Meta %",
+                min_value=0.0,
+                max_value=100.0,
+                value=target_pct,
+                step=1.0,
+                key=f"prev_act_{category}_{p.name}",
+                label_visibility="collapsed"
+            )
+        with col3:
+            if target_pct > 0:
+                diff = current_pct - target_pct
+                badge = "✅" if abs(diff) < 2 else ("⚠️ Alto" if diff > 0 else "🔴 Baixo")
+                st.write(badge)
+
+    if st.button("💾 Salvar Metas por Ativo", type="primary", key="prev_save_act"):
+        for asset_name, pct in updated.items():
+            if pct > 0:
+                db.add_or_update_asset_category_target(asset_name, category, PORTFOLIO_PREVIDENCIA, pct)
+            else:
+                db.delete_asset_category_target(asset_name, category, PORTFOLIO_PREVIDENCIA)
+        st.success("✓ Metas por ativo salvas!")
+        st.rerun()
+
+
+def _render_pgbl_planning(db: Database, positions):
     """Render PGBL tax planning dashboard"""
     st.subheader("📊 Planejamento PGBL - Benefício Fiscal")
 
@@ -466,25 +412,19 @@ def _render_pgbl_planning(db: Database):
 
     st.divider()
 
-    # Year selector
     current_year = datetime.now().year
     selected_year = st.selectbox(
         "📅 Selecione o Ano",
         options=list(range(current_year - 2, current_year + 2)),
-        index=2,  # Current year
+        index=2,
         help="Escolha o ano para planejamento do PGBL"
     )
 
-    # Get or create year settings
     year_settings = db.get_year_settings(selected_year)
     if not year_settings:
-        year_settings = PGBLYearSettings(
-            year=selected_year,
-            contributes_to_inss=True
-        )
+        year_settings = PGBLYearSettings(year=selected_year, contributes_to_inss=True)
         db.add_or_update_year_settings(year_settings)
 
-    # INSS contribution checkbox
     st.divider()
     contributes_to_inss = st.checkbox(
         "✅ Contribuo para o INSS ou regime próprio de previdência",
@@ -499,73 +439,47 @@ def _render_pgbl_planning(db: Database):
     if not contributes_to_inss:
         st.warning("⚠️ **Atenção**: Sem contribuição ao INSS, você NÃO pode deduzir o PGBL no Imposto de Renda!")
 
-    # Get income entries for the year
     income_entries = db.get_income_entries_by_year(selected_year)
 
-    # Calculate metrics
     taxable_income = pgbl_calc.calculate_taxable_income(income_entries)
     pgbl_limit = pgbl_calc.calculate_pgbl_limit(taxable_income)
 
-    # Get PGBL contributions from contributions table (actual money contributed)
+    # Sum contributions to Previdência assets this year
     start_of_year = datetime(selected_year, 1, 1)
     end_of_year = datetime(selected_year, 12, 31, 23, 59, 59)
     all_contributions = db.get_contributions_between_dates(start_of_year, end_of_year)
 
-    # Filter for Previdência assets by checking asset mapping
-    pgbl_contributions = []
-    for contrib in all_contributions:
-        mapping = db.get_asset_mapping(contrib.asset_name)
-        if mapping and mapping.custom_label == "Previdência":
-            pgbl_contributions.append(contrib)
-
-    # Sum actual contribution amounts (not position values!)
+    pgbl_contributions = [
+        c for c in all_contributions
+        if any(p.name == c.asset_name for p in positions)
+    ]
     current_pgbl_contributions = sum(c.contribution_amount for c in pgbl_contributions)
 
     remaining_investment = pgbl_calc.calculate_remaining_investment(pgbl_limit, current_pgbl_contributions)
     completion_pct = pgbl_calc.calculate_completion_percentage(pgbl_limit, current_pgbl_contributions)
     status, status_emoji, status_color = pgbl_calc.get_status_info(completion_pct)
 
-    # Display summary cards
     st.divider()
     st.subheader("💰 Resumo do Ano")
 
     col1, col2, col3, col4 = st.columns(4)
-
     with col1:
-        st.metric(
-            "Renda Bruta Tributável",
-            f"R$ {taxable_income:,.2f}",
-            help="Soma de salários, férias, aluguéis, etc. (excl. 13º e PLR)"
-        )
-
+        st.metric("Renda Bruta Tributável", f"R$ {taxable_income:,.2f}",
+                  help="Soma de salários, férias, aluguéis, etc. (excl. 13º e PLR)")
     with col2:
-        st.metric(
-            "Limite PGBL (12%)",
-            f"R$ {pgbl_limit:,.2f}",
-            help="Máximo que pode deduzir investindo em PGBL"
-        )
-
+        st.metric("Limite PGBL (12%)", f"R$ {pgbl_limit:,.2f}",
+                  help="Máximo que pode deduzir investindo em PGBL")
     with col3:
-        st.metric(
-            "Já Investido em PGBL",
-            f"R$ {current_pgbl_contributions:,.2f}",
-            help="Total de contribuições em Previdência neste ano"
-        )
-
+        st.metric("Já Investido em PGBL", f"R$ {current_pgbl_contributions:,.2f}",
+                  help="Total de contribuições em Previdência neste ano")
     with col4:
-        delta_color = "normal" if remaining_investment >= 0 else "inverse"
-        st.metric(
-            "Ainda Pode Investir",
-            f"R$ {max(0, remaining_investment):,.2f}",
-            delta=f"{completion_pct:.1f}% do limite usado",
-            delta_color=delta_color,
-            help="Quanto falta para atingir o limite de 12%"
-        )
+        st.metric("Ainda Pode Investir", f"R$ {max(0, remaining_investment):,.2f}",
+                  delta=f"{completion_pct:.1f}% do limite usado",
+                  delta_color="normal" if remaining_investment >= 0 else "inverse",
+                  help="Quanto falta para atingir o limite de 12%")
 
-    # Progress bar
     st.progress(min(completion_pct / 100, 1.0))
 
-    # Status message
     if completion_pct >= 100:
         st.success(f"{status_emoji} **Parabéns!** Você já atingiu ou ultrapassou o limite de 12%. Suas contribuições estão otimizadas para o benefício fiscal.")
     elif completion_pct >= 90:
@@ -575,7 +489,6 @@ def _render_pgbl_planning(db: Database):
     else:
         st.info(f"{status_emoji} Comece a registrar sua renda abaixo para calcular quanto pode investir em PGBL.")
 
-    # Deadline reminder
     if selected_year == current_year:
         days_left = pgbl_calc.calculate_days_until_deadline(current_year)
         if days_left > 0:
@@ -583,159 +496,114 @@ def _render_pgbl_planning(db: Database):
         elif days_left == 0:
             st.error("🚨 **ÚLTIMO DIA** para investir em PGBL e deduzir no IR deste ano!")
 
-    # Income tracking section
     st.divider()
     st.subheader("📝 Registro de Renda Mensal")
 
-    # Add new income entry
     with st.expander("➕ Adicionar Nova Entrada de Renda", expanded=len(income_entries) == 0):
-        with st.form("add_income_entry"):
-            col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-            with col1:
-                month = st.selectbox(
-                    "Mês",
-                    options=list(range(1, 13)),
-                    format_func=lambda m: [
-                        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
-                    ][m - 1]
-                )
+        with col1:
+            month = st.selectbox(
+                "Mês",
+                options=list(range(1, 13)),
+                format_func=lambda m: [
+                    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+                ][m - 1],
+                key="pgbl_month"
+            )
+            entry_type = st.selectbox(
+                "Tipo de Renda",
+                options=list(pgbl_calc.INCOME_TYPES.keys()),
+                format_func=lambda x: pgbl_calc.get_income_type_display_name(x),
+                key="pgbl_entry_type"
+            )
 
-                entry_type = st.selectbox(
-                    "Tipo de Renda",
-                    options=list(pgbl_calc.INCOME_TYPES.keys()),
-                    format_func=lambda x: pgbl_calc.get_income_type_display_name(x)
-                )
+        with col2:
+            amount = currency_input("Valor (R$)", key="pgbl_amount")
+            description = st.text_input("Descrição (opcional)", placeholder="Ex: Salário mensal", key="pgbl_description")
 
-            with col2:
-                amount = st.number_input(
-                    "Valor (R$)",
-                    min_value=0.0,
-                    step=100.0,
-                    format="%.2f"
-                )
+        is_taxable = pgbl_calc.is_taxable_income_type(entry_type)
+        if not is_taxable:
+            st.info(f"ℹ️ **{pgbl_calc.get_income_type_display_name(entry_type)}** não entra no cálculo do PGBL (tributação exclusiva na fonte)")
 
-                description = st.text_input(
-                    "Descrição (opcional)",
-                    placeholder="Ex: Salário mensal, Aluguel apt 101"
-                )
+        if st.button("💾 Adicionar Entrada", type="primary", key="pgbl_add_btn"):
+            if amount > 0:
+                db.add_income_entry(AnnualIncomeEntry(
+                    year=selected_year, month=month, entry_type=entry_type,
+                    amount=amount, description=description, date_added=datetime.now()
+                ))
+                st.success(f"✓ Entrada adicionada: {pgbl_calc.get_income_type_display_name(entry_type)} - R$ {amount:,.2f}")
+                st.rerun()
+            else:
+                st.error("O valor deve ser maior que zero!")
 
-            # Show if this type is taxable
-            is_taxable = pgbl_calc.is_taxable_income_type(entry_type)
-            if not is_taxable:
-                st.info(f"ℹ️ **{pgbl_calc.get_income_type_display_name(entry_type)}** não entra no cálculo do PGBL (tributação exclusiva na fonte)")
-
-            submitted = st.form_submit_button("💾 Adicionar Entrada", type="primary")
-
-            if submitted:
-                if amount > 0:
-                    new_entry = AnnualIncomeEntry(
-                        year=selected_year,
-                        month=month,
-                        entry_type=entry_type,
-                        amount=amount,
-                        description=description,
-                        date_added=datetime.now()
-                    )
-                    db.add_income_entry(new_entry)
-                    st.success(f"✓ Entrada adicionada: {pgbl_calc.get_income_type_display_name(entry_type)} - R$ {amount:,.2f}")
-                    st.rerun()
-                else:
-                    st.error("O valor deve ser maior que zero!")
-
-    # Display existing entries
     if income_entries:
         st.subheader("📊 Entradas Registradas")
 
-        # Group by month for display
         monthly_totals = pgbl_calc.categorize_income_by_month(income_entries)
         by_type = pgbl_calc.categorize_income_by_type(income_entries)
 
-        # Create display table
-        entry_data = []
-        for entry in income_entries:
-            entry_data.append({
-                'ID': entry.id,
-                'Mês': ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
-                        "Jul", "Ago", "Set", "Out", "Nov", "Dez"][entry.month - 1],
-                'Tipo': pgbl_calc.get_income_type_display_name(entry.entry_type),
-                'Valor': f"R$ {entry.amount:,.2f}",
-                'Tributável': "✅" if entry.is_taxable else "❌",
-                'Descrição': entry.description or "-"
-            })
+        entry_data = [{
+            'ID': e.id,
+            'Mês': ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"][e.month - 1],
+            'Tipo': pgbl_calc.get_income_type_display_name(e.entry_type),
+            'Valor': f"R$ {e.amount:,.2f}",
+            'Tributável': "✅" if e.is_taxable else "❌",
+            'Descrição': e.description or "-"
+        } for e in income_entries]
 
-        df_entries = pd.DataFrame(entry_data)
-
-        # Show table
         st.dataframe(
-            df_entries[['Mês', 'Tipo', 'Valor', 'Tributável', 'Descrição']],
-            use_container_width=True,
-            hide_index=True
+            pd.DataFrame(entry_data)[['Mês', 'Tipo', 'Valor', 'Tributável', 'Descrição']],
+            use_container_width=True, hide_index=True
         )
 
-        # Delete entries
-        st.write("**Deletar Entrada**")
         col1, col2 = st.columns([3, 1])
         with col1:
             entry_to_delete = st.selectbox(
-                "Selecione a entrada para deletar",
+                "Deletar entrada",
                 options=[e.id for e in income_entries],
-                format_func=lambda id: next(
+                format_func=lambda eid: next(
                     f"{e.month:02d} - {pgbl_calc.get_income_type_display_name(e.entry_type)} - R$ {e.amount:,.2f}"
-                    for e in income_entries if e.id == id
+                    for e in income_entries if e.id == eid
                 )
             )
         with col2:
             if st.button("🗑️ Deletar", type="secondary"):
                 db.delete_income_entry(entry_to_delete)
-                st.success("Entrada deletada!")
                 st.rerun()
 
-        # Monthly breakdown
         st.divider()
         st.subheader("📅 Resumo Mensal")
 
         month_data = []
-        for month_num in range(1, 13):
-            month_name = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                          "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][month_num - 1]
-            month_total = monthly_totals.get(month_num, 0.0)
-            month_entries = [e for e in income_entries if e.month == month_num]
+        for m in range(1, 13):
+            month_name = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+                          "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"][m - 1]
+            month_entries = [e for e in income_entries if e.month == m]
             month_taxable = sum(e.amount for e in month_entries if e.is_taxable)
-
             month_data.append({
                 'Mês': month_name,
-                'Total': f"R$ {month_total:,.2f}",
+                'Total': f"R$ {monthly_totals.get(m, 0.0):,.2f}",
                 'Tributável': f"R$ {month_taxable:,.2f}",
                 'Entradas': len(month_entries)
             })
-
         st.dataframe(month_data, use_container_width=True, hide_index=True)
 
-        # Breakdown by type
         st.divider()
         st.subheader("📋 Resumo por Tipo de Renda")
 
-        type_data = []
-        for entry_type, total in sorted(by_type.items(), key=lambda x: x[1], reverse=True):
-            type_name = pgbl_calc.get_income_type_display_name(entry_type)
-            is_taxable = pgbl_calc.is_taxable_income_type(entry_type)
-            count = sum(1 for e in income_entries if e.entry_type == entry_type)
-
-            type_data.append({
-                'Tipo': type_name,
-                'Total': f"R$ {total:,.2f}",
-                'Tributável': "✅" if is_taxable else "❌ (excluído)",
-                'Entradas': count
-            })
-
+        type_data = [{
+            'Tipo': pgbl_calc.get_income_type_display_name(et),
+            'Total': f"R$ {tot:,.2f}",
+            'Tributável': "✅" if pgbl_calc.is_taxable_income_type(et) else "❌ (excluído)",
+            'Entradas': sum(1 for e in income_entries if e.entry_type == et)
+        } for et, tot in sorted(by_type.items(), key=lambda x: x[1], reverse=True)]
         st.dataframe(type_data, use_container_width=True, hide_index=True)
 
     else:
-        st.info("📭 Nenhuma entrada de renda registrada ainda. Adicione suas rendas mensais acima para começar o planejamento.")
+        st.info("📭 Nenhuma entrada de renda registrada ainda.")
 
-    # Projection section
     if income_entries:
         st.divider()
         st.subheader("🔮 Projeção Anual")
@@ -746,27 +614,15 @@ def _render_pgbl_planning(db: Database):
         projected_remaining = projected_limit - current_pgbl_contributions
 
         col1, col2, col3 = st.columns(3)
-
         with col1:
-            st.metric(
-                "Meses com Dados",
-                f"{months_with_data}/12"
-            )
-
+            st.metric("Meses com Dados", f"{months_with_data}/12")
         with col2:
-            st.metric(
-                "Renda Projetada (Anual)",
-                f"R$ {projected_income:,.2f}",
-                help="Baseado na média mensal dos meses informados"
-            )
-
+            st.metric("Renda Projetada (Anual)", f"R$ {projected_income:,.2f}",
+                      help="Baseado na média mensal dos meses informados")
         with col3:
-            st.metric(
-                "Limite PGBL Projetado",
-                f"R$ {projected_limit:,.2f}",
-                delta=f"R$ {max(0, projected_remaining):,.2f} faltando",
-                help="12% da renda projetada"
-            )
+            st.metric("Limite PGBL Projetado", f"R$ {projected_limit:,.2f}",
+                      delta=f"R$ {max(0, projected_remaining):,.2f} faltando",
+                      help="12% da renda projetada")
 
         if months_with_data < 12:
-            st.info(f"ℹ️ Projeção baseada em {months_with_data} meses de dados. Continue registrando suas rendas para uma estimativa mais precisa!")
+            st.info(f"ℹ️ Projeção baseada em {months_with_data} meses de dados.")

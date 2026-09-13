@@ -6,8 +6,9 @@ import streamlit as st
 from datetime import datetime
 from parsers.xlsx_parser import XLSXParser, InvestmentPosition
 from parsers.pdf_image_parser import PDFImageParser
-from database.db import Database
+from database.db import Database, PORTFOLIO_INVESTIMENTOS, PORTFOLIO_PREVIDENCIA
 from database.models import Position
+from utils.ui_helpers import currency_input
 
 
 def render_upload_component(db: Database):
@@ -178,19 +179,10 @@ def _render_xlsx_editing(db: Database):
                 st.metric("Original", f"R$ {original_value:,.2f}", label_visibility="collapsed")
 
             with col3:
-                # Editable value
-                new_value = st.number_input(
-                    "Novo Valor (R$)",
-                    min_value=0.0,
-                    value=float(pos.value),
-                    step=100.0,
-                    key=f"xlsx_pos_value_{idx}",
-                    label_visibility="collapsed"
-                )
+                new_value = currency_input("Novo Valor (R$)", key=f"xlsx_pos_value_{idx}", initial_value=float(pos.value))
                 pos.value = new_value
 
             with col4:
-                # Show change indicator
                 if abs(new_value - original_value) > 0.01:
                     change_pct = ((new_value - original_value) / original_value * 100) if original_value > 0 else 0
                     st.metric("Δ", f"{change_pct:+.1f}%", label_visibility="collapsed")
@@ -205,35 +197,32 @@ def _render_xlsx_editing(db: Database):
     # Section to add new positions
     st.subheader("➕ Adicionar Novas Posições")
 
-    with st.form("xlsx_add_new_position"):
-        col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
+    with col1:
+        xlsx_new_name = st.text_input("Nome do Ativo", key="xlsx_new_name")
+        xlsx_new_value = currency_input("Valor (R$)", key="xlsx_new_value")
+        xlsx_new_main_cat = st.selectbox(
+            "Categoria Principal",
+            ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários",
+             "Previdência Privada", "COE", "Outro"],
+            key="xlsx_new_main_cat"
+        )
+    with col2:
+        xlsx_new_sub_cat = st.text_input("Subcategoria", key="xlsx_new_sub_cat")
+        xlsx_new_invested = currency_input("Valor Investido (R$) - Opcional", key="xlsx_new_invested")
 
-        with col1:
-            new_name = st.text_input("Nome do Ativo")
-            new_value = st.number_input("Valor (R$)", min_value=0.0, step=100.0)
-            new_main_cat = st.selectbox(
-                "Categoria Principal",
-                ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários",
-                 "Previdência Privada", "COE", "Outro"]
+    if st.button("➕ Adicionar à Lista", key="xlsx_add_btn"):
+        if xlsx_new_name and xlsx_new_value > 0:
+            new_pos = InvestmentPosition(
+                name=xlsx_new_name,
+                value=xlsx_new_value,
+                main_category=xlsx_new_main_cat,
+                sub_category=xlsx_new_sub_cat,
+                date=position_date,
+                invested_value=xlsx_new_invested if xlsx_new_invested > 0 else None
             )
-
-        with col2:
-            new_sub_cat = st.text_input("Subcategoria")
-            new_invested = st.number_input("Valor Investido (R$) - Opcional", min_value=0.0, step=100.0)
-
-        if st.form_submit_button("➕ Adicionar à Lista"):
-            if new_name and new_value > 0:
-                # Create InvestmentPosition (to match the type from parser)
-                new_pos = InvestmentPosition(
-                    name=new_name,
-                    value=new_value,
-                    main_category=new_main_cat,
-                    sub_category=new_sub_cat,
-                    date=position_date,
-                    invested_value=new_invested if new_invested > 0 else None
-                )
-                st.session_state.xlsx_new_positions.append(new_pos)
-                st.rerun()
+            st.session_state.xlsx_new_positions.append(new_pos)
+            st.rerun()
 
     # Show new positions to be added
     if st.session_state.xlsx_new_positions:
@@ -274,6 +263,15 @@ def _render_xlsx_final_summary_and_save(db: Database, positions: list, position_
         change = ((final_value - original_value) / original_value * 100) if original_value > 0 else 0
         st.metric("Variação", f"{change:+.2f}%")
 
+    # Portfolio selector
+    portfolio = st.radio(
+        "Carteira de destino",
+        [PORTFOLIO_INVESTIMENTOS, PORTFOLIO_PREVIDENCIA],
+        format_func=lambda p: "Investimentos" if p == PORTFOLIO_INVESTIMENTOS else "Previdência",
+        horizontal=True,
+        key="xlsx_import_portfolio"
+    )
+
     # Check for duplicate date
     existing_positions = db.get_positions_by_date(position_date)
 
@@ -288,13 +286,13 @@ def _render_xlsx_final_summary_and_save(db: Database, positions: list, position_
         with col1:
             if st.button("🗑️ Deletar Existentes e Salvar", type="secondary"):
                 db.delete_positions_by_date(position_date)
-                _import_positions(db, final_positions)
+                _import_positions(db, final_positions, portfolio)
                 _clear_xlsx_editing_state()
                 st.rerun()
 
         with col2:
             if st.button("➕ Salvar Mesmo Assim", type="secondary"):
-                _import_positions(db, final_positions)
+                _import_positions(db, final_positions, portfolio)
                 _clear_xlsx_editing_state()
                 st.rerun()
 
@@ -306,7 +304,7 @@ def _render_xlsx_final_summary_and_save(db: Database, positions: list, position_
         col1, col2 = st.columns([1, 4])
         with col1:
             if st.button("💾 Salvar Posições", type="primary"):
-                _import_positions(db, final_positions)
+                _import_positions(db, final_positions, portfolio)
                 _clear_xlsx_editing_state()
                 st.rerun()
         with col2:
@@ -324,17 +322,17 @@ def _clear_xlsx_editing_state():
     st.session_state.xlsx_original_values = {}
 
 
-def _import_positions(db: Database, positions: list):
+def _import_positions(db: Database, positions: list, portfolio: str = PORTFOLIO_INVESTIMENTOS):
     """Import positions into database"""
     with st.spinner("Importando posições..."):
         count = 0
         for inv_pos in positions:
-            # Convert InvestmentPosition to Position model
             pos = Position(
                 name=inv_pos.name,
                 value=inv_pos.value,
                 main_category=inv_pos.main_category,
                 sub_category=inv_pos.sub_category,
+                portfolio=portfolio,
                 date=inv_pos.date,
                 invested_value=inv_pos.invested_value,
                 percentage=inv_pos.percentage if hasattr(inv_pos, 'percentage') else None,
@@ -350,12 +348,20 @@ def _render_manual_entry(db: Database):
     """Render manual entry form"""
     st.subheader("Entrada Manual de Posição")
 
+    # Portfolio selector outside the form so it's reactive
+    portfolio = st.radio(
+        "Carteira",
+        [PORTFOLIO_INVESTIMENTOS, PORTFOLIO_PREVIDENCIA],
+        format_func=lambda p: "Investimentos" if p == PORTFOLIO_INVESTIMENTOS else "Previdência",
+        horizontal=True,
+        key="manual_entry_portfolio"
+    )
+
     with st.form("manual_entry"):
         col1, col2 = st.columns(2)
 
         with col1:
             name = st.text_input("Nome do Ativo", placeholder="Ex: Tesouro IPCA+ 2035")
-            value = st.number_input("Valor Atual (R$)", min_value=0.0, step=100.0)
             main_category = st.selectbox(
                 "Categoria Principal",
                 ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários", "Previdência Privada", "COE", "Outro"]
@@ -364,12 +370,9 @@ def _render_manual_entry(db: Database):
         with col2:
             sub_category = st.text_input("Subcategoria", placeholder="Ex: Pós-Fixado, Multimercados")
             date = st.date_input("Data da Posição", value=datetime.now())
-            invested_value = st.number_input(
-                "Valor Investido (R$) - Opcional",
-                min_value=0.0,
-                step=100.0,
-                value=0.0
-            )
+
+        value = currency_input("Valor Atual (R$)", key="manual_entry_value")
+        invested_value = currency_input("Valor Investido (R$) - Opcional", key="manual_entry_invested")
 
         submitted = st.form_submit_button("➕ Adicionar Posição", type="primary")
 
@@ -382,6 +385,7 @@ def _render_manual_entry(db: Database):
                     value=value,
                     main_category=main_category,
                     sub_category=sub_category,
+                    portfolio=portfolio,
                     date=datetime.combine(date, datetime.min.time()),
                     invested_value=invested_value if invested_value > 0 else None
                 )
@@ -461,11 +465,9 @@ def _render_record_contribution(db: Database):
             )
 
             # Contribution amount
-            contribution_amount = st.number_input(
+            contribution_amount = currency_input(
                 "Valor da Contribuição (R$)",
-                min_value=0.0,
-                step=100.0,
-                help="Digite apenas o valor que você está contribuindo agora (não o total)"
+                key="contrib_amount"
             )
 
         with col2:
@@ -729,246 +731,177 @@ def _render_record_contribution(db: Database):
 
 
 def _render_update_positions(db: Database):
-    """Render interface to update positions from a previous date"""
+    """Render interface to update positions one-by-one (stepper/wizard style)."""
     st.subheader("Atualizar Posições Existentes")
-    st.write("Carregue posições de uma data anterior e atualize os valores, ou edite posições na mesma data para corrigir valores incorretos.")
+    st.write("Carregue posições de uma data anterior e atualize os valores um por um.")
 
-    # Get all available dates
     available_dates = db.get_all_dates()
-
     if not available_dates:
         st.info("Nenhuma posição encontrada no banco de dados. Adicione posições primeiro.")
         return
 
-    # Initialize session state for edited positions
-    if 'editing_positions' not in st.session_state:
-        st.session_state.editing_positions = None
-        st.session_state.base_date = None
-        st.session_state.new_date = None
-        st.session_state.positions_to_remove = set()
-        st.session_state.new_positions = []
-        st.session_state.original_values = {}
-        st.session_state.edit_same_date = False
+    # Session state initialisation
+    if 'upd_positions' not in st.session_state:
+        st.session_state.upd_positions = None
+        st.session_state.upd_values = {}       # idx -> float (pending edits)
+        st.session_state.upd_removed = set()   # set of idx to delete
+        st.session_state.upd_index = 0
+        st.session_state.upd_base_date = None
+        st.session_state.upd_new_date = None
+        st.session_state.upd_same_date = False
 
-    col1, col2 = st.columns(2)
-    # Checkbox to toggle edit mode
-    edit_same_date = st.checkbox(
-        "✏️ Editar na mesma data",
-        value=False,
-        help="Marque para editar valores na mesma data. Desmarque para criar posições em uma nova data."
+    # ── Load screen ──────────────────────────────────────────────────────────
+    if st.session_state.upd_positions is None:
+        edit_same_date = st.checkbox(
+            "Editar na mesma data",
+            value=False,
+            help="Marque para sobrescrever os dados da data selecionada."
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            base_date = st.selectbox(
+                "Data Base",
+                options=available_dates,
+                format_func=lambda d: d.strftime('%d/%m/%Y'),
+            )
+        with col2:
+            if edit_same_date:
+                st.date_input("Data de Destino", value=base_date, disabled=True)
+                new_date = base_date
+            else:
+                new_date = st.date_input("Data de Destino", value=datetime.now())
+
+        if st.button("Carregar Posições", type="primary"):
+            positions = db.get_positions_by_date(base_date)
+            if positions:
+                st.session_state.upd_positions = positions
+                st.session_state.upd_values = {i: p.value for i, p in enumerate(positions)}
+                st.session_state.upd_removed = set()
+                st.session_state.upd_index = 0
+                st.session_state.upd_base_date = base_date
+                st.session_state.upd_new_date = (
+                    datetime.combine(new_date, datetime.min.time())
+                    if not isinstance(new_date, datetime)
+                    else new_date
+                )
+                st.session_state.upd_same_date = edit_same_date
+                # Clear currency widget state so inputs start fresh
+                for i in range(len(positions)):
+                    for suffix in ("_cents",):
+                        st.session_state.pop(f"upd_val_{i}{suffix}", None)
+                st.rerun()
+            else:
+                st.warning("Nenhuma posição encontrada para essa data.")
+        return
+
+    # ── Stepper screen ────────────────────────────────────────────────────────
+    positions = st.session_state.upd_positions
+    total = len(positions)
+
+    # Find the ordered list of non-removed indices
+    active_indices = [i for i in range(total) if i not in st.session_state.upd_removed]
+
+    # Progress bar + header
+    done_count = sum(
+        1 for i in active_indices
+        if st.session_state.upd_values.get(i) != positions[i].value
+           or i in st.session_state.upd_removed
+    )
+    removed_count = len(st.session_state.upd_removed)
+    kept = total - removed_count
+    st.caption(
+        f"Data base: {st.session_state.upd_base_date.strftime('%d/%m/%Y')}  →  "
+        f"Destino: {st.session_state.upd_new_date.strftime('%d/%m/%Y')}   |   "
+        f"{kept} mantidas · {removed_count} removidas"
     )
 
-    with col1:
-        base_date = st.selectbox(
-            "Selecionar Data Base",
-            options=available_dates,
-            format_func=lambda d: d.strftime('%d/%m/%Y'),
-            help="Escolha a data das posições que deseja editar/atualizar"
-        )
+    # Clamp index to valid active range
+    idx = st.session_state.upd_index
+    if active_indices and idx not in active_indices:
+        idx = active_indices[0]
+        st.session_state.upd_index = idx
 
-    with col2:
-        # Date input - disabled if editing same date
-        if edit_same_date:
-            st.date_input(
-                "Data de Destino",
-                value=base_date,
-                disabled=True,
-                help="Editando na mesma data da base selecionada"
-            )
-            new_date = base_date
-        else:
-            new_date = st.date_input(
-                "Data de Destino",
-                value=datetime.now(),
-                help="Data para salvar as posições atualizadas"
-            )
+    if not active_indices:
+        st.info("Todas as posições foram removidas.")
+    else:
+        pos = positions[idx]
+        step_num = active_indices.index(idx) + 1
+        st.progress(step_num / len(active_indices), text=f"Ativo {step_num} de {len(active_indices)}")
 
-    if st.button("🔄 Carregar Posições", type="primary"):
-        positions = db.get_positions_by_date(base_date)
-        if positions:
-            st.session_state.editing_positions = positions
-            st.session_state.base_date = base_date
-            st.session_state.new_date = datetime.combine(new_date, datetime.min.time()) if isinstance(new_date, datetime) else datetime.combine(new_date, datetime.min.time())
-            st.session_state.edit_same_date = edit_same_date
-            st.session_state.positions_to_remove = set()
-            st.session_state.new_positions = []
-            # Store original values when loading positions
-            st.session_state.original_values = {idx: pos.value for idx, pos in enumerate(positions)}
-            st.rerun()
-
-    # Show editing interface if positions are loaded
-    if st.session_state.editing_positions:
         st.divider()
 
-        # Show summary
-        total_value = sum(p.value for p in st.session_state.editing_positions
-                         if st.session_state.editing_positions.index(p) not in st.session_state.positions_to_remove)
-        kept_count = len(st.session_state.editing_positions) - len(st.session_state.positions_to_remove)
+        # Asset card
+        col_info, col_input = st.columns([2, 2])
+        with col_info:
+            st.markdown(f"### {pos.name}")
+            if pos.custom_label:
+                st.caption(f"Categoria: {pos.custom_label}")
+            if pos.main_category:
+                st.caption(f"Tipo: {pos.main_category}")
+            orig = positions[idx].value
+            st.metric("Valor original", f"R$ {orig:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Data Base", st.session_state.base_date.strftime('%d/%m/%Y'))
-        with col2:
-            st.metric("Nova Data", st.session_state.new_date.strftime('%d/%m/%Y'))
-        with col3:
-            st.metric("Posições Ativas", f"{kept_count} de {len(st.session_state.editing_positions)}")
+        with col_input:
+            current_saved = st.session_state.upd_values.get(idx, pos.value)
+            new_val = currency_input("Novo valor (R$)", key=f"upd_val_{idx}", initial_value=current_saved)
+            st.session_state.upd_values[idx] = new_val
 
-        st.subheader("Editar Posições")
-        st.write("Atualize os valores, marque para remover ou mantenha como está.")
+            if new_val != orig:
+                delta_pct = ((new_val - orig) / orig * 100) if orig else 0
+                st.caption(f"Variação: {delta_pct:+.1f}%")
 
-        # Create editable table
-        edited_positions = []
-        for idx, pos in enumerate(st.session_state.editing_positions):
-            if idx in st.session_state.positions_to_remove:
-                continue
-
-            with st.container():
-                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
-
-                with col1:
-                    st.write(f"**{pos.name}**")
-                    if pos.custom_label:
-                        st.caption(f"📊 {pos.custom_label}")
-
-                with col2:
-                    # Get original value from session state
-                    original_value = st.session_state.original_values.get(idx, pos.value)
-                    st.metric("Original", f"R$ {original_value:,.2f}", label_visibility="collapsed")
-
-                with col3:
-                    new_value = st.number_input(
-                        "Valor (R$)",
-                        min_value=0.0,
-                        value=float(pos.value),
-                        step=100.0,
-                        key=f"pos_value_{idx}",
-                        label_visibility="collapsed"
-                    )
-                    pos.value = new_value
-
-                with col4:
-                    if st.button("🗑️", key=f"remove_{idx}", help="Remover esta posição"):
-                        st.session_state.positions_to_remove.add(idx)
-                        st.rerun()
-
-                st.divider()
-
-        # Section to add new positions
-        st.subheader("➕ Adicionar Novas Posições")
-
-        with st.form("add_new_position"):
-            col1, col2 = st.columns(2)
-
-            with col1:
-                new_name = st.text_input("Nome do Ativo")
-                new_value = st.number_input("Valor (R$)", min_value=0.0, step=100.0)
-                new_main_cat = st.selectbox(
-                    "Categoria Principal",
-                    ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários",
-                     "Previdência Privada", "COE", "Outro"]
-                )
-
-            with col2:
-                new_sub_cat = st.text_input("Subcategoria")
-                new_invested = st.number_input("Valor Investido (R$) - Opcional", min_value=0.0, step=100.0)
-
-            if st.form_submit_button("➕ Adicionar à Lista"):
-                if new_name and new_value > 0:
-                    new_pos = Position(
-                        name=new_name,
-                        value=new_value,
-                        main_category=new_main_cat,
-                        sub_category=new_sub_cat,
-                        date=st.session_state.new_date,
-                        invested_value=new_invested if new_invested > 0 else None
-                    )
-                    st.session_state.new_positions.append(new_pos)
-                    st.rerun()
-
-        # Show new positions to be added
-        if st.session_state.new_positions:
-            st.subheader("Novas Posições a Adicionar")
-            for idx, pos in enumerate(st.session_state.new_positions):
-                col1, col2, col3 = st.columns([4, 2, 1])
-                with col1:
-                    st.write(f"**{pos.name}**")
-                    st.caption(f"{pos.main_category} - {pos.sub_category}")
-                with col2:
-                    st.write(f"R$ {pos.value:,.2f}")
-                with col3:
-                    if st.button("🗑️", key=f"remove_new_{idx}"):
-                        st.session_state.new_positions.pop(idx)
-                        st.rerun()
-
-        # Calculate final summary
         st.divider()
-        final_positions = [p for idx, p in enumerate(st.session_state.editing_positions)
-                          if idx not in st.session_state.positions_to_remove]
-        final_positions.extend(st.session_state.new_positions)
-        final_value = sum(p.value for p in final_positions)
 
-        st.subheader("Resumo Final")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total de Posições", len(final_positions))
-        with col2:
-            st.metric("Valor Total", f"R$ {final_value:,.2f}")
-        with col3:
-            original_value = sum(p.value for p in st.session_state.editing_positions)
-            change = ((final_value - original_value) / original_value * 100) if original_value > 0 else 0
-            st.metric("Variação", f"{change:+.2f}%")
+        # Navigation buttons
+        col_prev, col_next, col_remove, col_save = st.columns([1, 1, 1, 2])
 
-        # Check for duplicate date or handle same-date editing
-        if st.session_state.edit_same_date:
-            # Editing same date - always delete and replace
-            st.info(
-                f"ℹ️ As alterações serão salvas na mesma data ({st.session_state.new_date.strftime('%d/%m/%Y')}). "
-                f"As {len(st.session_state.editing_positions)} posições originais serão substituídas."
-            )
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("💾 Salvar Alterações", type="primary"):
-                    # Delete existing positions for this date first
-                    db.delete_positions_by_date(st.session_state.new_date)
-                    _save_updated_positions(db, final_positions, st.session_state.new_date)
-                    _clear_editing_state()
-                    st.rerun()
-            with col2:
-                if st.button("❌ Cancelar", type="secondary"):
-                    _clear_editing_state()
-                    st.rerun()
-        else:
-            # Creating new date - check for duplicates
-            existing_on_new_date = db.get_positions_by_date(st.session_state.new_date)
-            if existing_on_new_date:
-                st.warning(
-                    f"⚠️ Já existem {len(existing_on_new_date)} posições para "
-                    f"{st.session_state.new_date.strftime('%d/%m/%Y')}. "
-                    f"Salvar irá adicionar posições duplicadas ou você pode deletar as existentes primeiro."
-                )
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("🗑️ Deletar Existentes e Salvar", type="secondary"):
-                        db.delete_positions_by_date(st.session_state.new_date)
-                        _save_updated_positions(db, final_positions, st.session_state.new_date)
-                        _clear_editing_state()
-                        st.rerun()
-                with col2:
-                    if st.button("💾 Salvar Mesmo Assim", type="secondary"):
-                        _save_updated_positions(db, final_positions, st.session_state.new_date)
-                        _clear_editing_state()
-                        st.rerun()
-            else:
-                col1, col2 = st.columns([1, 4])
-                with col1:
-                    if st.button("💾 Salvar Posições Atualizadas", type="primary"):
-                        _save_updated_positions(db, final_positions, st.session_state.new_date)
-                        _clear_editing_state()
-                        st.rerun()
-                with col2:
-                    if st.button("❌ Cancelar", type="secondary"):
-                        _clear_editing_state()
-                        st.rerun()
+        prev_indices = [i for i in active_indices if i < idx]
+        next_indices = [i for i in active_indices if i > idx]
+
+        with col_prev:
+            if st.button("← Anterior", disabled=not prev_indices, type="secondary"):
+                st.session_state.upd_index = prev_indices[-1]
+                st.rerun()
+
+        with col_next:
+            if st.button("Próximo →", disabled=not next_indices, type="secondary"):
+                st.session_state.upd_index = next_indices[0]
+                st.rerun()
+
+        with col_remove:
+            if st.button("Remover ativo", type="secondary"):
+                st.session_state.upd_removed.add(idx)
+                remaining = [i for i in active_indices if i != idx]
+                if remaining:
+                    after = [i for i in remaining if i > idx]
+                    st.session_state.upd_index = after[0] if after else remaining[-1]
+                st.rerun()
+
+        with col_save:
+            # Always show finish button once the user has gone through at least one asset
+            if st.button("Concluir e Salvar", type="primary"):
+                final_positions = []
+                for i, p in enumerate(positions):
+                    if i in st.session_state.upd_removed:
+                        continue
+                    p.value = st.session_state.upd_values.get(i, p.value)
+                    final_positions.append(p)
+
+                if st.session_state.upd_same_date:
+                    db.delete_positions_by_date(st.session_state.upd_new_date)
+                else:
+                    existing = db.get_positions_by_date(st.session_state.upd_new_date)
+                    if existing:
+                        db.delete_positions_by_date(st.session_state.upd_new_date)
+
+                _save_updated_positions(db, final_positions, st.session_state.upd_new_date)
+                _clear_editing_state()
+                st.rerun()
+
+    st.divider()
+    if st.button("❌ Cancelar e Descartar"):
+        _clear_editing_state()
+        st.rerun()
 
 
 def _save_updated_positions(db: Database, positions: list, new_date: datetime):
@@ -986,12 +919,14 @@ def _save_updated_positions(db: Database, positions: list, new_date: datetime):
 
 def _clear_editing_state():
     """Clear editing session state"""
-    st.session_state.editing_positions = None
-    st.session_state.base_date = None
-    st.session_state.new_date = None
-    st.session_state.positions_to_remove = set()
-    st.session_state.new_positions = []
-    st.session_state.original_values = {}
+    for key in (
+        "upd_positions", "upd_values", "upd_removed",
+        "upd_index", "upd_base_date", "upd_new_date", "upd_same_date",
+        # legacy keys (kept for safety)
+        "editing_positions", "base_date", "new_date",
+        "positions_to_remove", "new_positions", "original_values",
+    ):
+        st.session_state.pop(key, None)
 
 
 def _render_pdf_image_upload(db: Database):
@@ -1149,19 +1084,10 @@ def _render_pdf_image_editing(db: Database):
                 st.metric("Original", f"R$ {original_value:,.2f}", label_visibility="collapsed")
 
             with col3:
-                # Editable value
-                new_value = st.number_input(
-                    "Novo Valor (R$)",
-                    min_value=0.0,
-                    value=float(pos.value),
-                    step=100.0,
-                    key=f"pdf_image_pos_value_{idx}",
-                    label_visibility="collapsed"
-                )
+                new_value = currency_input("Novo Valor (R$)", key=f"pdf_image_pos_value_{idx}", initial_value=float(pos.value))
                 pos.value = new_value
 
             with col4:
-                # Show change indicator
                 if abs(new_value - original_value) > 0.01:
                     change_pct = ((new_value - original_value) / original_value * 100) if original_value > 0 else 0
                     st.metric("Δ", f"{change_pct:+.1f}%", label_visibility="collapsed")
@@ -1176,35 +1102,32 @@ def _render_pdf_image_editing(db: Database):
     # Section to add new positions
     st.subheader("➕ Adicionar Novas Posições")
 
-    with st.form("pdf_image_add_new_position"):
-        col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
+    with col1:
+        pdf_new_name = st.text_input("Nome do Ativo", key="pdf_new_name")
+        pdf_new_value = currency_input("Valor (R$)", key="pdf_new_value")
+        pdf_new_main_cat = st.selectbox(
+            "Categoria Principal",
+            ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários",
+             "Previdência Privada", "COE", "Outro"],
+            key="pdf_new_main_cat"
+        )
+    with col2:
+        pdf_new_sub_cat = st.text_input("Subcategoria", key="pdf_new_sub_cat")
+        pdf_new_invested = currency_input("Valor Investido (R$) - Opcional", key="pdf_new_invested")
 
-        with col1:
-            new_name = st.text_input("Nome do Ativo")
-            new_value = st.number_input("Valor (R$)", min_value=0.0, step=100.0)
-            new_main_cat = st.selectbox(
-                "Categoria Principal",
-                ["Renda Fixa", "Fundos de Investimentos", "Fundos Imobiliários",
-                 "Previdência Privada", "COE", "Outro"]
+    if st.button("➕ Adicionar à Lista", key="pdf_add_btn"):
+        if pdf_new_name and pdf_new_value > 0:
+            new_pos = InvestmentPosition(
+                name=pdf_new_name,
+                value=pdf_new_value,
+                main_category=pdf_new_main_cat,
+                sub_category=pdf_new_sub_cat,
+                date=position_date,
+                invested_value=pdf_new_invested if pdf_new_invested > 0 else None
             )
-
-        with col2:
-            new_sub_cat = st.text_input("Subcategoria")
-            new_invested = st.number_input("Valor Investido (R$) - Opcional", min_value=0.0, step=100.0)
-
-        if st.form_submit_button("➕ Adicionar à Lista"):
-            if new_name and new_value > 0:
-                # Create InvestmentPosition
-                new_pos = InvestmentPosition(
-                    name=new_name,
-                    value=new_value,
-                    main_category=new_main_cat,
-                    sub_category=new_sub_cat,
-                    date=position_date,
-                    invested_value=new_invested if new_invested > 0 else None
-                )
-                st.session_state.pdf_image_new_positions.append(new_pos)
-                st.rerun()
+            st.session_state.pdf_image_new_positions.append(new_pos)
+            st.rerun()
 
     # Show new positions to be added
     if st.session_state.pdf_image_new_positions:

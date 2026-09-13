@@ -5,34 +5,35 @@ Portfolio dashboard component
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from database.db import Database
+from database.db import Database, FIXED_CATEGORIES, PORTFOLIO_INVESTIMENTOS, PORTFOLIO_PREVIDENCIA
 from utils.calculations import PortfolioCalculator
+from utils.ui_helpers import currency_input
 
 
 def render_dashboard_component(db: Database):
     """Render portfolio dashboard"""
     st.header("📊 Carteira de Investimento")
 
-    # Get all positions from the latest date (complete snapshot)
-    all_positions = db.get_latest_positions()
+    # Get investimentos portfolio positions only (Previdência is a separate dashboard)
+    all_positions = db.get_latest_positions(portfolio=PORTFOLIO_INVESTIMENTOS)
 
     if not all_positions:
         st.info("📭 Nenhuma posição encontrada. Importe seus dados primeiro!")
         return
 
-    # Get targets to filter positions (exclude labels with 0% target, unless they have reserve amount)
-    targets = db.get_all_targets()
+    # Get targets for the investimentos portfolio
+    targets = db.get_targets_by_portfolio(PORTFOLIO_INVESTIMENTOS)
     # Include labels with target > 0% OR reserve amount set (for Segurança)
     target_labels = set(
         t.custom_label for t in targets
-        if t.target_percentage > 0 # or (t.reserve_amount and t.reserve_amount > 0)
+        if t.target_percentage > 0
     ) if targets else set()
     reserve_label = set(
         t.custom_label for t in targets
         if t.reserve_amount and t.reserve_amount > 0
     ) if targets else set()
 
-    # Filter positions: only include those with custom labels that have targets > 0% or reserve
+    # Filter positions: only include those with custom labels that have targets > 0%
     positions = [p for p in all_positions if p.custom_label in target_labels]
     excluded_positions = [p for p in all_positions if p.custom_label not in target_labels]
     reserve_positions = [p for p in all_positions if p.custom_label in reserve_label]
@@ -91,7 +92,10 @@ def render_dashboard_component(db: Database):
     st.divider()
 
     # Tabs for different views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Visão Geral", "Classificação de Ativos", "Detalhes por Ativo", "Definir Metas", "Rebalanceamento"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Visão Geral", "Classificação de Ativos", "Detalhes por Ativo",
+        "Definir Metas", "Metas por Ativo", "Rebalanceamento"
+    ])
 
     with tab1:
         _render_overview(positions, db)
@@ -106,6 +110,9 @@ def render_dashboard_component(db: Database):
         _render_target_management(db)
 
     with tab5:
+        _render_asset_targets_management(db)
+
+    with tab6:
         _render_rebalancing(positions, reserve_positions, db, total_value)
 
 def _render_overview(positions, db: Database):
@@ -202,15 +209,15 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     """Render rebalancing analysis"""
     st.subheader("Análise de Rebalanceamento")
 
-    # Check if we have targets and mappings
-    targets = db.get_all_targets()
+    # Use only investimentos portfolio targets
+    targets = db.get_targets_by_portfolio(PORTFOLIO_INVESTIMENTOS)
 
     if not targets:
-        st.warning("⚠️ Defina suas metas de alocação primeiro na aba 'Classificação de Ativos'.")
+        st.warning("⚠️ Defina suas metas de alocação primeiro na aba 'Definir Metas'.")
         return
 
     # Check if assets are mapped
-    unmapped_count = len(db.get_unmapped_assets())
+    unmapped_count = len([p for p in positions if not p.custom_label])
     if unmapped_count > 0:
         st.warning(f"⚠️ {unmapped_count} ativos não estão classificados. Classifique-os para uma análise completa.")
 
@@ -219,23 +226,16 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     current_allocation = calc.calculate_current_allocation(positions, use_custom_labels=True)
     reserve_allocation = calc.calculate_current_allocation(reserve_positions, use_custom_labels=True)
 
-    # Get target allocations (exclude 0% targets and Segurança if it has reserve)
-    target_allocations = {}
-    seguranca_has_reserve = False
+    # Build target allocations — exclude Segurança (managed by reserve amount, not %)
+    target_allocations = {
+        t.custom_label: t.target_percentage
+        for t in targets
+        if t.target_percentage > 0 and t.custom_label != "Segurança"
+    }
 
-    for t in targets:
-        if t.target_percentage > 0:
-            # Skip Segurança if it has a reserve amount (will be handled separately)
-            if t.custom_label == "Segurança" and t.reserve_amount:
-                seguranca_has_reserve = True
-                continue
-            target_allocations[t.custom_label] = t.target_percentage
-
-    # Calculate available funds from Segurança reserve
     seguranca_info = None
 
-    # Get Segurança target
-    seguranca_target = db.get_target("Segurança")
+    seguranca_target = db.get_target("Segurança", PORTFOLIO_INVESTIMENTOS)
     if seguranca_target and seguranca_target.reserve_amount:
         # Calculate current Segurança value
         current_seguranca = reserve_allocation.get("Segurança", 0.0)
@@ -271,10 +271,6 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     else:
         default_investment = 0.0
 
-    # Store in session state to trigger UI update
-    if 'seguranca_excess' not in st.session_state or st.session_state.seguranca_excess != default_investment:
-        st.session_state.seguranca_excess = default_investment
-
     # Display Segurança reserve info
     if seguranca_info:
         if seguranca_info['type'] == 'excess':
@@ -297,20 +293,11 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
                 f"Valor: R$ {seguranca_info['current']:,.2f}"
             )
 
-    # Input for additional investment
     st.write("**Novo Investimento**")
-
-    help_text = "Deixe em 0 para ver apenas o status atual"
-    if seguranca_info and seguranca_info['type'] == 'excess':
-        help_text = f"Valor padrão: R$ {st.session_state.seguranca_excess:,.2f} disponível do excesso de Segurança"
-
-    additional_investment = st.number_input(
+    additional_investment = currency_input(
         "Valor adicional a investir (R$)",
-        min_value=0.0,
-        value=st.session_state.seguranca_excess,
-        step=1000.0,
-        help=help_text,
-        key="additional_investment_input"
+        key="additional_investment_input",
+        initial_value=default_investment
     )
 
     # Create rebalancing plan
@@ -329,6 +316,9 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     # Don't add Segurança to the table - it's only used for calculating available funds
     # The reserve status is already shown above in the status messages
 
+    # Calculate current percentages (always relative to current total, ignoring additional investment)
+    current_total = sum(a.current_value for a in plan.analyses)
+
     # Add all categories from the plan
     for analysis in plan.analyses:
         status_emoji = {
@@ -337,30 +327,82 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
             'underweight': '🔴'
         }
 
+        # Calculate percentage of current total (not including additional investment)
+        current_pct = (analysis.current_value / current_total * 100) if current_total > 0 else 0
+
+        # Calculate difference based on current percentage vs target
+        diff_pct = current_pct - analysis.target_percentage
+
         comparison_data.append({
             'Status': status_emoji.get(analysis.status, ''),
             'Categoria': analysis.label,
-            'Atual': f"{analysis.current_percentage:.1f}%",
+            'Atual': f"{current_pct:.1f}%",
             'Meta': f"{analysis.target_percentage:.1f}%",
-            'Diferença': f"{analysis.difference_percentage:+.1f}%",
+            'Diferença': f"{diff_pct:+.1f}%",
             'Valor Atual': f"R$ {analysis.current_value:,.2f}",
             'Ajuste Necessário': f"R$ {analysis.rebalance_amount:+,.2f}" if abs(analysis.rebalance_amount) > 1 else "✓"
         })
 
     st.dataframe(comparison_data, use_container_width=True, hide_index=True)
 
-    # Display suggestions
-    if plan.suggestions:
-        st.divider()
-        st.write("**Sugestões de Rebalanceamento**")
+    # Display suggestions - generate custom ones based on current percentages
+    st.divider()
+    st.write("**Sugestões de Rebalanceamento**")
 
-        for suggestion in plan.suggestions:
-            if suggestion.startswith('\n'):
-                st.write(suggestion.strip())
-            elif suggestion.startswith('  -'):
-                st.write(suggestion)
-            else:
-                st.info(suggestion)
+    if additional_investment > 0:
+        st.info(f"Você tem R$ {additional_investment:,.2f} para investir.")
+
+        # Find categories that need investment
+        underweight = [a for a in plan.analyses if a.rebalance_amount > 0]
+
+        if underweight:
+            st.write("\nSugestão de alocação do novo investimento:")
+            remaining = additional_investment
+
+            for analysis in underweight:
+                if remaining <= 0:
+                    break
+
+                amount = min(analysis.rebalance_amount, remaining)
+                # Calculate current percentage of current total
+                current_pct = (analysis.current_value / current_total * 100) if current_total > 0 else 0
+                st.write(
+                    f"  - Investir R$ {amount:,.2f} em {analysis.label} "
+                    f"(atual {current_pct:.1f}% → meta {analysis.target_percentage:.1f}%)"
+                )
+                remaining -= amount
+
+            if remaining > 0:
+                st.write(
+                    f"\nSobram R$ {remaining:,.2f}. Distribua proporcionalmente entre as categorias "
+                    f"ou mantenha em reserva."
+                )
+    else:
+        # No new investment - suggest reallocation
+        overweight = [a for a in plan.analyses if a.rebalance_amount < 0]
+        underweight = [a for a in plan.analyses if a.rebalance_amount > 0]
+
+        if overweight and underweight:
+            st.info("Para rebalancear sem novo investimento:")
+
+            for analysis in overweight[:3]:  # Top 3 overweight
+                current_pct = (analysis.current_value / current_total * 100) if current_total > 0 else 0
+                st.write(
+                    f"  - Reduzir {analysis.label}: "
+                    f"R$ {abs(analysis.rebalance_amount):,.2f} "
+                    f"(atual {current_pct:.1f}% → meta {analysis.target_percentage:.1f}%)"
+                )
+
+            st.write("\nAlocar em:")
+            for analysis in underweight[:3]:  # Top 3 underweight
+                current_pct = (analysis.current_value / current_total * 100) if current_total > 0 else 0
+                st.write(
+                    f"  - Aumentar {analysis.label}: "
+                    f"R$ {analysis.rebalance_amount:,.2f} "
+                    f"(atual {current_pct:.1f}% → meta {analysis.target_percentage:.1f}%)"
+                )
+        else:
+            st.success("✅ Seu portfólio está balanceado!")
 
     # Summary metrics
     st.divider()
@@ -388,10 +430,10 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     st.write("**📋 Detalhamento por Ativo**")
     st.caption("Veja quanto investir ou desinvestir em cada ativo dentro de cada categoria")
 
-    _render_asset_level_rebalancing(positions, plan, additional_investment)
+    _render_asset_level_rebalancing(positions, plan, additional_investment, db)
 
 
-def _render_asset_level_rebalancing(positions, plan, additional_investment):
+def _render_asset_level_rebalancing(positions, plan, additional_investment, db: Database):
     """Render asset-level rebalancing recommendations"""
 
     # Group positions by custom label
@@ -430,16 +472,40 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
             f"{status_emoji} **{analysis.label}** - {status_text} | "
             f"Ajuste: R$ {analysis.rebalance_amount:+,.2f}"
         ):
-            col1, col2 = st.columns(2)
+            # Calculate percentages for display
+            current_total = sum(a.current_value for a in plan.analyses)
+            current_pct = (analysis.current_value / current_total * 100) if current_total > 0 else 0
 
-            with col1:
-                st.metric("Valor Atual", f"R$ {analysis.current_value:,.2f}")
-                st.metric("Alocação Atual", f"{analysis.current_percentage:.2f}%")
+            # Show three columns: Current, Post-Investment, Target
+            if additional_investment > 0:
+                col1, col2, col3 = st.columns(3)
 
-            with col2:
-                target_value = (analysis.target_percentage / 100) * plan.total_portfolio_value
-                st.metric("Valor Meta", f"R$ {target_value:,.2f}")
-                st.metric("Alocação Meta", f"{analysis.target_percentage:.2f}%")
+                with col1:
+                    st.metric("Atual", f"R$ {analysis.current_value:,.2f}")
+                    st.metric("Alocação", f"{current_pct:.1f}%")
+
+                with col2:
+                    new_value = analysis.current_value + analysis.rebalance_amount
+                    post_investment_pct = (new_value / plan.total_portfolio_value * 100) if plan.total_portfolio_value > 0 else 0
+                    st.metric("Pós-Investimento", f"R$ {new_value:,.2f}")
+                    st.metric("Alocação", f"{post_investment_pct:.1f}%")
+
+                with col3:
+                    target_value = (analysis.target_percentage / 100) * plan.total_portfolio_value
+                    st.metric("Meta", f"R$ {target_value:,.2f}")
+                    st.metric("Alocação", f"{analysis.target_percentage:.1f}%")
+            else:
+                # No investment - show just Current and Target
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.metric("Valor Atual", f"R$ {analysis.current_value:,.2f}")
+                    st.metric("Alocação Atual", f"{current_pct:.1f}%")
+
+                with col2:
+                    target_value = (analysis.target_percentage / 100) * plan.total_portfolio_value
+                    st.metric("Valor Meta", f"R$ {target_value:,.2f}")
+                    st.metric("Alocação Meta", f"{analysis.target_percentage:.1f}%")
 
             st.divider()
 
@@ -449,21 +515,25 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
             # Sort assets by value
             sorted_positions = sorted(category_positions, key=lambda p: p.value, reverse=True)
 
-            asset_data = []
             total_category_value = sum(p.value for p in sorted_positions)
 
+            # Load per-asset targets for this category
+            asset_targets = {t.asset_name: t.target_pct for t in db.get_asset_category_targets(analysis.label, PORTFOLIO_INVESTIMENTOS)}
+
+            asset_data = []
             for pos in sorted_positions:
                 pct_of_category = (pos.value / total_category_value * 100) if total_category_value > 0 else 0
-
                 asset_row = {
                     'Ativo': pos.name,
                     'Valor Atual': f"R$ {pos.value:,.2f}",
                     '% da Categoria': f"{pct_of_category:.1f}%",
                 }
-
+                if pos.name in asset_targets:
+                    diff = pct_of_category - asset_targets[pos.name]
+                    asset_row['Meta %'] = f"{asset_targets[pos.name]:.1f}%"
+                    asset_row['Status Ativo'] = "✅" if abs(diff) < 2 else ("⚠️ Alto" if diff > 0 else "🔴 Baixo")
                 if pos.sub_category:
                     asset_row['Subcategoria'] = pos.sub_category
-
                 asset_data.append(asset_row)
 
             st.dataframe(asset_data, use_container_width=True, hide_index=True)
@@ -479,11 +549,70 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                     f"**Ação recomendada:** Investir R$ {analysis.rebalance_amount:,.2f} nesta categoria"
                 )
 
-                # Suggest distribution strategy
                 st.write("**💡 Estratégias de investimento:**")
 
-                # Strategy 1: Proportional to current holdings
-                st.write("**Opção 1 - Proporcional aos ativos atuais:**")
+                # Post-investment category total (current holdings + the rebalance amount for this category)
+                post_category_total = total_category_value + analysis.rebalance_amount
+
+                # Strategy: Target-driven (shown first when per-asset targets exist)
+                assets_with_targets = [pos for pos in sorted_positions if pos.name in asset_targets]
+                assets_without_targets = [pos for pos in sorted_positions if pos.name not in asset_targets]
+
+                if assets_with_targets:
+                    st.write("**Distribuição por Meta (Metas por Ativo):**")
+                    st.caption(
+                        "Quanto investir em cada ativo para que a categoria inteira atinja as metas definidas. "
+                        "Ativos sem meta recebem o restante proporcional ao valor atual."
+                    )
+
+                    # Compute target values for assets that have targets
+                    target_values = {
+                        pos.name: (asset_targets[pos.name] / 100) * post_category_total
+                        for pos in assets_with_targets
+                    }
+                    target_investments = {
+                        name: max(0.0, tv - next(p.value for p in sorted_positions if p.name == name))
+                        for name, tv in target_values.items()
+                    }
+
+                    # Remaining budget for assets without targets
+                    budget_used = sum(target_investments.values())
+                    remaining_budget = analysis.rebalance_amount - budget_used
+
+                    # Distribute remaining proportionally among assets without targets
+                    value_no_target = sum(p.value for p in assets_without_targets)
+                    no_target_investments = {}
+                    for pos in assets_without_targets:
+                        proportion = pos.value / value_no_target if value_no_target > 0 else (1 / len(assets_without_targets) if assets_without_targets else 0)
+                        no_target_investments[pos.name] = max(0.0, remaining_budget * proportion)
+
+                    # Pre-compute new totals so the denominator is the actual post-investment sum
+                    new_totals = {}
+                    for pos in sorted_positions:
+                        if pos.name in target_investments:
+                            new_totals[pos.name] = pos.value + target_investments[pos.name]
+                        else:
+                            new_totals[pos.name] = pos.value + no_target_investments.get(pos.name, 0.0)
+                    actual_post_total = sum(new_totals.values())
+
+                    target_data = []
+                    for pos in sorted_positions:
+                        invest = target_investments.get(pos.name, no_target_investments.get(pos.name, 0.0))
+                        new_total = new_totals[pos.name]
+                        new_pct = (new_total / actual_post_total * 100) if actual_post_total > 0 else 0
+                        target_data.append({
+                            'Ativo': pos.name,
+                            'Meta %': f"{asset_targets[pos.name]:.1f}%" if pos.name in asset_targets else '—',
+                            'Valor a Investir': f"R$ {invest:,.2f}",
+                            'Novo Total': f"R$ {new_total:,.2f}",
+                            '% Pós-Invest.': f"{new_pct:.1f}%",
+                        })
+
+                    st.dataframe(target_data, use_container_width=True, hide_index=True)
+                    st.divider()
+
+                # Fallback strategies (always shown)
+                st.write("**Opção - Proporcional aos ativos atuais:**")
                 prop_data = []
                 for pos in sorted_positions:
                     proportion = pos.value / total_category_value if total_category_value > 0 else (1 / len(sorted_positions))
@@ -495,8 +624,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                     })
                 st.dataframe(prop_data, use_container_width=True, hide_index=True)
 
-                # Strategy 2: Equal distribution
-                st.write("**Opção 2 - Distribuição igual:**")
+                st.write("**Opção - Distribuição igual:**")
                 equal_amount = analysis.rebalance_amount / len(sorted_positions)
                 equal_data = []
                 for pos in sorted_positions:
@@ -506,11 +634,6 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                         'Novo Total': f"R$ {pos.value + equal_amount:,.2f}"
                     })
                 st.dataframe(equal_data, use_container_width=True, hide_index=True)
-
-                # Strategy 3: Focus on specific assets
-                if len(sorted_positions) > 1:
-                    st.write("**Opção 3 - Escolha manual:**")
-                    st.caption("Selecione os ativos e distribua o investimento conforme sua estratégia")
 
             else:
                 # Need to reduce money - only show if no additional investment
@@ -544,6 +667,62 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment):
                         f"💡 Esta categoria está {abs(analysis.difference_percentage):.1f}% acima da meta. "
                         f"Considere não adicionar mais recursos aqui e focar nas categorias abaixo da meta."
                     )
+
+
+def _render_asset_targets_management(db: Database):
+    """Set per-asset target % within each category for the Investimentos portfolio."""
+    st.subheader("Metas por Ativo — Investimentos")
+    st.info(
+        "Defina a porcentagem máxima que cada ativo pode representar dentro de sua categoria. "
+        "Útil para limitar posições concentradas (ex: Bitcoin a no máximo 20% de Antifragilidade)."
+    )
+
+    category = st.selectbox("Categoria", FIXED_CATEGORIES, key="inv_act_category")
+
+    positions = db.get_latest_positions(portfolio=PORTFOLIO_INVESTIMENTOS)
+    cat_positions = [p for p in positions if p.custom_label == category]
+
+    if not cat_positions:
+        st.info(f"Nenhuma posição classificada em '{category}'.")
+        return
+
+    cat_total = sum(p.value for p in cat_positions)
+    existing_targets = {t.asset_name: t.target_pct for t in db.get_asset_category_targets(category, PORTFOLIO_INVESTIMENTOS)}
+
+    st.write(f"**Ativos em {category}** (Total: R$ {cat_total:,.2f})")
+
+    updated = {}
+    for p in sorted(cat_positions, key=lambda x: x.value, reverse=True):
+        current_pct = p.value / cat_total * 100 if cat_total > 0 else 0
+        target_pct = existing_targets.get(p.name, 0.0)
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            st.write(f"**{p.name}**")
+            st.caption(f"Atual: {current_pct:.1f}%")
+        with col2:
+            updated[p.name] = st.number_input(
+                "Meta %",
+                min_value=0.0,
+                max_value=100.0,
+                value=target_pct,
+                step=1.0,
+                key=f"inv_act_{category}_{p.name}",
+                label_visibility="collapsed"
+            )
+        with col3:
+            if target_pct > 0:
+                diff = current_pct - target_pct
+                badge = "✅" if abs(diff) < 2 else ("⚠️ Alto" if diff > 0 else "🔴 Baixo")
+                st.write(badge)
+
+    if st.button("💾 Salvar Metas por Ativo", type="primary", key="inv_save_act"):
+        for asset_name, pct in updated.items():
+            if pct > 0:
+                db.add_or_update_asset_category_target(asset_name, category, PORTFOLIO_INVESTIMENTOS, pct)
+            else:
+                db.delete_asset_category_target(asset_name, category, PORTFOLIO_INVESTIMENTOS)
+        st.success("✓ Metas por ativo salvas!")
+        st.rerun()
 
 
 def _render_asset_details(positions, db: Database):
@@ -740,23 +919,9 @@ def _render_asset_classification(db: Database):
                 st.error("Preencha todos os campos.")
 
 
-def _select_labels_or_create_new(existing_labels):
-    # Allow selecting existing label or creating new
-    label_option = st.radio(
-        "Opção",
-        ["Usar Categoria Existente", "Criar Nova Categoria"],
-        horizontal=True
-    )
-
-    if label_option == "Usar Categoria Existente":
-        if existing_labels:
-            custom_label = st.selectbox("Categoria", existing_labels)
-        else:
-            st.warning("Nenhuma categoria existente. Crie uma nova.")
-            custom_label = st.text_input("Nova Categoria")
-    else:
-        custom_label = st.text_input("Nome da Nova Categoria", placeholder="Ex: Renda Fixa Conservadora")
-    return custom_label
+def _select_labels_or_create_new(existing_labels=None):
+    """Return a fixed category selection (no free-form creation)."""
+    return st.selectbox("Categoria", FIXED_CATEGORIES)
 
 
 def _render_mapping_management(db: Database):
@@ -786,10 +951,11 @@ def _render_mapping_management(db: Database):
                     st.write(mapping.asset_name)
 
                 with col2:
-                    # Allow inline editing
-                    new_label = st.text_input(
-                        "Nova categoria",
-                        value=mapping.custom_label,
+                    default_idx = FIXED_CATEGORIES.index(mapping.custom_label) if mapping.custom_label in FIXED_CATEGORIES else 0
+                    new_label = st.selectbox(
+                        "Categoria",
+                        FIXED_CATEGORIES,
+                        index=default_idx,
                         key=f"edit_{mapping.id}",
                         label_visibility="collapsed"
                     )
@@ -801,7 +967,7 @@ def _render_mapping_management(db: Database):
 
                     if new_label != mapping.custom_label:
                         if st.button("💾", key=f"save_{mapping.id}", help="Salvar alteração"):
-                            db.add_or_update_mapping(mapping.asset_name, new_label)
+                            db.add_or_update_mapping(mapping.asset_name, new_label, PORTFOLIO_INVESTIMENTOS)
                             st.rerun()
     
     st.divider()
@@ -820,78 +986,28 @@ def _render_mapping_management(db: Database):
 
 def _render_target_management(db: Database):
     """Render interface to manage target allocations"""
-
-    # Emergency Reserve Section (Separate from targets)
-    st.markdown("### 🔒 Reserva de Emergência")
-    st.info(
-        "A categoria **Segurança** é sua reserva de emergência. Defina um valor mínimo "
-        "e qualquer excesso será automaticamente disponibilizado para rebalanceamento."
-    )
-
-    seguranca_target = db.get_target("Segurança")
-    current_reserve = seguranca_target.reserve_amount if seguranca_target and seguranca_target.reserve_amount else 0.0
-
-    with st.form("reserve_form"):
-        reserve_amount = st.number_input(
-            "Valor Mínimo de Reserva de Segurança (R$)",
-            min_value=0.0,
-            value=current_reserve,
-            step=1000.0,
-            help="Valor mínimo a manter sempre na categoria Segurança. O excesso será disponibilizado para rebalanceamento nas outras categorias."
-        )
-
-        reserve_submitted = st.form_submit_button("💾 Salvar Reserva de Emergência", type="primary")
-
-        if reserve_submitted:
-            # Save with 0% target so it doesn't appear in dashboard
-            reserve_amt = reserve_amount if reserve_amount > 0 else None
-            db.add_or_update_target("Segurança", 0.0, reserve_amt)
-            st.success("✓ Reserva de emergência salva com sucesso!")
-            st.rerun()
-
-    # Show current reserve
-    if current_reserve > 0:
-        st.success(f"✅ Reserva atual configurada: **R$ {current_reserve:,.2f}**")
-    else:
-        st.info("ℹ️ Nenhuma reserva de emergência configurada.")
-
-    st.divider()
-
-    # Target Allocations Section
-    st.markdown("### 📊 Metas de Alocação")
+    st.subheader("Definir Metas — Investimentos")
 
     st.info(
-        "⚠️ **Importante:** Apenas categorias com metas definidas aparecerão no Carteira de Investimento. "
+        "Defina a porcentagem alvo para cada categoria da **Carteira de Investimentos**. "
+        "A soma deve ser 100%. Previdência é gerenciada separadamente."
     )
 
-    st.markdown("""
-    Defina a porcentagem ideal que cada categoria deve representar no seu portfólio.
-    O sistema irá comparar sua posição atual com as metas e sugerir rebalanceamentos.
-    """)
-
-    # Get all custom labels from mappings (excluding Segurança)
-    mappings = db.get_all_mappings()
-    all_labels = sorted(set(m.custom_label for m in mappings if m.custom_label != "Segurança"))
-
-    if not all_labels:
-        st.warning("⚠️ Classifique seus ativos primeiro antes de definir metas.")
-        return
-
-    # Get existing targets (excluding Segurança)
-    existing_targets = db.get_all_targets()
-    targets_dict = {t.custom_label: t.target_percentage for t in existing_targets if t.custom_label != "Segurança"}
-
-    # Form to add/edit targets
-    st.subheader("Definir Metas")
+    # Get existing targets for investimentos portfolio (4 fixed categories only)
+    existing_targets = db.get_targets_by_portfolio(PORTFOLIO_INVESTIMENTOS)
+    targets_dict = {
+        t.custom_label: t.target_percentage
+        for t in existing_targets
+        if t.custom_label != "Segurança"
+    }
 
     with st.form("target_form"):
-        st.write("Defina a porcentagem alvo para cada categoria:")
+        st.write("Porcentagem alvo por categoria:")
 
         targets_input = {}
-        total_percentage = 0
+        total_percentage = 0.0
 
-        # Create input for each label (Segurança already excluded from all_labels)
-        for label in all_labels:
+        for label in FIXED_CATEGORIES:
             current_target = targets_dict.get(label, 0.0)
             targets_input[label] = st.number_input(
                 f"{label} (%)",
@@ -903,11 +1019,10 @@ def _render_target_management(db: Database):
             )
             total_percentage += targets_input[label]
 
-        # Show total
-        if total_percentage != 100:
-            st.warning(f"⚠️ Total: {total_percentage:.1f}% (deve somar 100%)")
-        else:
+        if abs(total_percentage - 100.0) < 0.01:
             st.success(f"✓ Total: {total_percentage:.1f}%")
+        else:
+            st.warning(f"⚠️ Total: {total_percentage:.1f}% (deve somar 100%)")
 
         submitted = st.form_submit_button("💾 Salvar Metas", type="primary")
 
@@ -916,32 +1031,39 @@ def _render_target_management(db: Database):
                 st.error("A soma das porcentagens deve ser 100%!")
             else:
                 for label, target_pct in targets_input.items():
-                    if target_pct > 0:  # Only save non-zero targets
-                        db.add_or_update_target(label, target_pct, None)
-
+                    db.add_or_update_target(label, PORTFOLIO_INVESTIMENTOS, target_pct)
                 st.success("✓ Metas salvas com sucesso!")
                 st.rerun()
 
-    # Display current targets (excluding Segurança)
+    # Segurança reserve amount
+    st.divider()
+    st.subheader("Reserva de Segurança")
+    st.info("Segurança é gerenciada por um valor mínimo em R$, não por porcentagem.")
+
+    seguranca_target = db.get_target("Segurança", PORTFOLIO_INVESTIMENTOS)
+    current_reserve = seguranca_target.reserve_amount if (seguranca_target and seguranca_target.reserve_amount) else 0.0
+
+    new_reserve = currency_input(
+        "Valor mínimo da Reserva de Segurança (R$)",
+        key="seguranca_reserve_input",
+        initial_value=current_reserve
+    )
+
+    if st.button("💾 Salvar Reserva de Segurança", type="secondary"):
+        db.add_or_update_target("Segurança", PORTFOLIO_INVESTIMENTOS, 0.0, new_reserve)
+        st.success(f"✓ Reserva de Segurança definida: R$ {new_reserve:,.2f}")
+        st.rerun()
+
+    # Display current targets
     st.divider()
     st.subheader("Metas Atuais")
-
-    # Filter out Segurança from display
-    display_targets = [t for t in existing_targets if t.custom_label != "Segurança"]
-
-    if display_targets:
-        for target in display_targets:
-            col1, col2, col3 = st.columns([3, 2, 1])
-
+    active_targets = [t for t in existing_targets if t.custom_label != "Segurança" and t.target_percentage > 0]
+    if active_targets:
+        for t in sorted(active_targets, key=lambda x: x.target_percentage, reverse=True):
+            col1, col2 = st.columns([3, 2])
             with col1:
-                st.write(target.custom_label)
-
+                st.write(t.custom_label)
             with col2:
-                st.write(f"{target.target_percentage:.1f}%")
-
-            with col3:
-                if st.button("🗑️", key=f"del_target_{target.id}", help="Deletar meta"):
-                    db.delete_target(target.custom_label)
-                    st.rerun()
+                st.write(f"{t.target_percentage:.1f}%")
     else:
         st.info("Nenhuma meta definida ainda.")

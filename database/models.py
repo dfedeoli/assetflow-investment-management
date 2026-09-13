@@ -8,6 +8,16 @@ from typing import Optional, Dict
 
 
 @dataclass
+class AssetCategoryTarget:
+    """Per-asset target % within a category (e.g. BTC at most 20% of Antifragilidade)"""
+    id: Optional[int] = None
+    asset_name: str = ""
+    category_name: str = ""
+    portfolio: str = "investimentos"
+    target_pct: float = 0.0
+
+
+@dataclass
 class Position:
     """Investment position model"""
     id: Optional[int] = None
@@ -16,7 +26,8 @@ class Position:
     main_category: str = ""
     sub_category: str = ""
     custom_label: Optional[str] = None
-    sub_label: Optional[str] = None  # For sub-classification within custom_label
+    sub_label: Optional[str] = None  # kept for migration safety, no longer used
+    portfolio: str = "investimentos"  # "investimentos" or "previdencia"
     date: datetime = None
     invested_value: Optional[float] = None
     percentage: Optional[float] = None
@@ -33,6 +44,7 @@ class Position:
             'sub_category': self.sub_category,
             'custom_label': self.custom_label,
             'sub_label': self.sub_label,
+            'portfolio': self.portfolio,
             'date': self.date.isoformat() if self.date else None,
             'invested_value': self.invested_value,
             'percentage': self.percentage,
@@ -75,6 +87,7 @@ class AssetMapping:
     id: Optional[int] = None
     asset_name: str = ""
     custom_label: str = ""
+    portfolio: str = "investimentos"  # "investimentos" or "previdencia"
     created_at: datetime = None
     updated_at: datetime = None
 

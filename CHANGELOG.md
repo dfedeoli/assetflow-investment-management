@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Data
+- **2026-08-31 snapshot imported**: Added a new portfolio snapshot for 31/08/2026 (28 positions: 19 investimentos + 9 previdência) transcribed from the XP "Posição Consolidada" PDF statement, using a new reusable script `utils/import_pdf_snapshot.py` (direct DB insert, no OpenAI Vision call). A credit-card cashback position (manually swept to Segurança) and a small saldo projetado were intentionally excluded as non-standing positions. One fund from the PDF was recorded under its existing database name, since the broker had only changed its display name for the same underlying fund, so it kept its existing Valorização classification.
+
+### Added
+- **Dual-portfolio architecture**: Hard separation between `investimentos` and `previdencia` portfolios. Each portfolio uses the same 4 fixed categories (Estabilidade, Diversificação, Valorização, Antifragilidade) with fully independent targets and rebalancing. Added `portfolio` column to `positions`, `asset_mappings`, and `target_allocations` tables.
+- **Fixed category enforcement**: Replaced free-form category creation with a fixed set of categories. `FIXED_CATEGORIES` constant exported from `database/db.py`; all category selectors are now `st.selectbox` instead of free-form text inputs. No new categories can be created.
+- **Previdência portfolio dashboard**: Full rewrite of `components/previdencia.py` — portfolio-based queries (`portfolio='previdencia'`), 6 tabs (Visão Geral, Classificação, Metas, Rebalanceamento, Metas por Ativo, PGBL), no sub-labels. Classification and targets now use the same 4 fixed categories as the investimentos portfolio.
+- **Per-asset category targets**: New `asset_category_targets` table and CRUD methods. Both investimentos and previdência dashboards expose a "Metas por Ativo" tab where users set a target % for individual assets within a category. Rebalancing surfaces current-vs-target status badges per asset.
+- **Calculator-style currency input** (`utils/ui_helpers.py`): `currency_input()` widget stores state as integer centavos, displays in Brazilian format (R$ 1.234,56), digits fill from right. Applied to all monetary fields in upload, dashboard, and previdência components.
+- **Portfolio selector on import**: `components/upload.py` now includes a portfolio radio selector (Investimentos / Previdência) for both manual entry and XLSX import, setting `portfolio` on all new positions.
+- **Segurança guard**: `db.add_or_update_target()` coerces `target_percentage = 0.0` when `custom_label == "Segurança"`. Segurança is excluded from all percentage target forms; only its `reserve_amount` is editable.
+- **SPECS.md**: Product specifications document describing what the app does and why — written from the user's perspective, covering core concepts, features, and business rules without tying to any specific implementation or tech stack. Serves as the source of truth for future product decisions.
+
+### Changed
+- **`database/db.py`**: Added module-level constants (`FIXED_CATEGORIES`, `PORTFOLIO_INVESTIMENTOS`, `PORTFOLIO_PREVIDENCIA`). Updated DDL for `positions`, `asset_mappings`, `target_allocations`. Updated all query methods to accept `portfolio` parameter. `_initialize_default_labels()` now seeds 9 rows (4 categories × 2 portfolios + Segurança for investimentos). Renamed/added: `get_latest_positions(portfolio=None)`, `get_targets_by_portfolio(portfolio)`, `add_or_update_target(custom_label, portfolio, ...)`, `get_asset_category_targets()`, `add_or_update_asset_category_target()`, `delete_asset_category_target()`.
+- **`utils/migrate_db.py`**: Full rewrite to handle dual-portfolio migration. Adds `portfolio` column to existing tables, recreates `target_allocations` with new `UNIQUE(custom_label, portfolio)` constraint, seeds 9 fixed-category rows, moves old "Previdência" positions to `portfolio='previdencia'`, deletes old "Previdência" asset_mappings (user must re-classify), creates `asset_category_targets` table.
+- **`database/models.py`**: Added `portfolio` field to `Position` and `AssetMapping` dataclasses. Added `AssetCategoryTarget` dataclass.
+- **`components/dashboard.py`**: Filters positions and targets by `portfolio='investimentos'`. Replaced free-form label creation with `st.selectbox` over `FIXED_CATEGORIES`. Uses `currency_input` for monetary fields. Added "Metas por Ativo" tab. Rebalancing shows per-asset current-vs-target status.
+
+### Fixed
+- **Tab order in Carteira de Investimento**: "Rebalanceamento" is now the last tab (was 5th of 6). "Metas por Ativo" moved to 5th position so rebalancing — which uses the per-asset targets — comes after all configuration tabs.
+- **Asset-target-driven investment strategy in Rebalanceamento**: When per-asset targets are defined (via "Metas por Ativo"), the rebalancing detail for each category now shows a primary "Distribuição por Meta" strategy. It calculates exactly how much to invest in each asset so the post-investment category composition matches each asset's target %. Assets without a target receive the leftover budget distributed proportionally to their current value. The existing proportional and equal-split strategies remain as fallback options below.
+- **Rebalancing Analysis Display Improvements**: Complete overhaul of percentage calculations and displays in the rebalancing tab for clarity:
+  - **Alocação Atual vs Meta table**: "Atual" column now always shows current allocation percentages relative to current total (sums to 100%)
+  - **Diferença calculation**: Fixed to show difference between current % and target % (not affected by additional investment)
+  - **Sugestões de Rebalanceamento**: Updated to show "atual X% → meta Y%" format (instead of confusing post-investment percentages)
+  - **Asset-level detail sections**: When additional investment > 0, now shows three clear columns:
+    - **Atual**: Current value and allocation % (of current total)
+    - **Pós-Investimento**: Value and allocation % after applying recommended investment
+    - **Meta**: Target value and allocation % to achieve
+  - When no additional investment, shows two columns (Atual and Meta) as before
+  - All percentages now consistently reference either "current total" or "new total" with clear labeling
+  - Implementation: `components/dashboard.py:332-521`
+
 ### Fixed
 - **Google Drive Authentication Error**: Fixed `invalid_grant: Bad Request` error when refresh token expires
   - When `creds.refresh()` fails (token expired, revoked, or password changed), now deletes invalid `token.pickle` and triggers fresh OAuth flow
