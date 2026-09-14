@@ -221,7 +221,15 @@ class Database:
     # ==================== Position Operations ====================
 
     def add_position(self, position: Position) -> int:
-        """Add a new position to the database"""
+        """
+        Add or update a position in the database.
+
+        A position is uniquely identified by (name, date, portfolio): if one already
+        exists for that combination it is updated in place, otherwise a new row is
+        inserted. This prevents duplicate rows when the same date's snapshot is saved
+        more than once (e.g. running Entrada Manual, Atualizar Posições, or Registrar
+        Contribuição multiple times on the same day).
+        """
         cursor = self.conn.cursor()
 
         # Check if there's a mapping for this asset; inherit portfolio and custom_label
@@ -229,6 +237,36 @@ class Database:
         if mapping:
             position.custom_label = mapping.custom_label
             position.portfolio = mapping.portfolio
+
+        date_str = position.date.isoformat() if position.date else datetime.now().isoformat()
+
+        cursor.execute("""
+            SELECT id FROM positions WHERE name = ? AND date = ? AND portfolio = ?
+        """, (position.name, date_str, position.portfolio))
+        existing = cursor.fetchone()
+
+        if existing:
+            existing_id = existing['id']
+            cursor.execute("""
+                UPDATE positions SET
+                    value = ?, main_category = ?, sub_category = ?, custom_label = ?,
+                    sub_label = ?, invested_value = ?, percentage = ?, quantity = ?,
+                    additional_info = ?
+                WHERE id = ?
+            """, (
+                position.value,
+                position.main_category,
+                position.sub_category,
+                position.custom_label,
+                position.sub_label,
+                position.invested_value,
+                position.percentage,
+                position.quantity,
+                position.additional_info,
+                existing_id
+            ))
+            self.conn.commit()
+            return existing_id
 
         cursor.execute("""
             INSERT INTO positions (
@@ -243,7 +281,7 @@ class Database:
             position.custom_label,
             position.sub_label,
             position.portfolio,
-            position.date.isoformat() if position.date else datetime.now().isoformat(),
+            date_str,
             position.invested_value,
             position.percentage,
             position.quantity,

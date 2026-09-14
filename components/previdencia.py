@@ -306,6 +306,13 @@ def _render_rebalancing(positions, db: Database, total_value: float):
     status_emoji = {'balanced': '✅', 'overweight': '⚠️', 'underweight': '🔴'}
     comparison_data = []
     for a in plan.analyses:
+        # When there's new money, show the amount actually allocated to this category
+        # (capped by the shared pool), not the raw isolated distance-to-target.
+        if additional > 0 and a.status == 'underweight':
+            display_amount = a.capped_investment_amount
+        else:
+            display_amount = a.rebalance_amount
+
         comparison_data.append({
             'Status': status_emoji.get(a.status, ''),
             'Categoria': a.label,
@@ -313,7 +320,7 @@ def _render_rebalancing(positions, db: Database, total_value: float):
             'Meta': f"{a.target_percentage:.1f}%",
             'Diferença': f"{a.difference_percentage:+.1f}%",
             'Valor Atual': f"R$ {a.current_value:,.2f}",
-            'Ajuste Necessário': f"R$ {a.rebalance_amount:+,.2f}" if abs(a.rebalance_amount) > 1 else "✓"
+            'Ajuste Necessário': f"R$ {display_amount:+,.2f}" if abs(display_amount) > 1 else "✓"
         })
     st.dataframe(comparison_data, use_container_width=True, hide_index=True)
 

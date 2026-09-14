@@ -1,0 +1,28 @@
+"""
+Template for utils/pdf_snapshot_data.py — the real, local-only data file consumed by
+utils/import_pdf_snapshot.py.
+
+Copy this file to utils/pdf_snapshot_data.py (that exact filename is gitignored) and
+fill in your real transcribed PDF data there. Never rename this .example file or put
+real values directly in it — it IS tracked by git.
+"""
+
+from datetime import datetime
+
+from database.db import PORTFOLIO_INVESTIMENTOS, PORTFOLIO_PREVIDENCIA
+
+SNAPSHOT_DATE = datetime(2026, 8, 31)
+
+# Each tuple: (name, value, main_category, sub_category, portfolio)
+POSITIONS = [
+    # -- Investimentos --
+    ("Example FII ABCD11", 8057.28, "Fundos Imobiliários", "Fundos Listados", PORTFOLIO_INVESTIMENTOS),
+    ("Example Fixed Income Fund RF Simples", 67059.66, "Fundos de Investimentos", "Pós-Fixado", PORTFOLIO_INVESTIMENTOS),
+    ("Example Multimarket Fund FIM", 34889.71, "Fundos de Investimentos", "Multimercados", PORTFOLIO_INVESTIMENTOS),
+    ("Example Equity Fund FIA", 9006.92, "Fundos de Investimentos", "Renda Variável Brasil", PORTFOLIO_INVESTIMENTOS),
+    ("Example COE Product", 43347.55, "COE", "COE", PORTFOLIO_INVESTIMENTOS),
+
+    # -- Previdência --
+    ("Example PGBL Fund I", 1388.92, "Previdência Privada", "PGBL", PORTFOLIO_PREVIDENCIA),
+    ("Example PGBL Fund II", 2052.49, "Previdência Privada", "PGBL", PORTFOLIO_PREVIDENCIA),
+]

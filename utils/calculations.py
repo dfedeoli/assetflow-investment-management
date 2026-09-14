@@ -14,8 +14,9 @@ class AllocationAnalysis:
     current_percentage: float
     target_percentage: float
     difference_percentage: float
-    rebalance_amount: float  # Positive = need to add, Negative = need to reduce
+    rebalance_amount: float  # Positive = need to add, Negative = need to reduce (uncapped, isolated distance to target)
     status: str  # 'overweight', 'underweight', 'balanced'
+    capped_investment_amount: float = 0.0  # Actual new money allocated to this category, capped by the shared additional_investment pool
 
 
 @dataclass
@@ -184,6 +185,16 @@ class PortfolioCalculator:
         # Sort by status and difference
         analyses.sort(key=lambda x: (x.status != 'underweight', abs(x.difference_percentage)), reverse=True)
 
+        # Cap each underweight category's share of the new money to the shared additional_investment pool,
+        # so per-category amounts never sum to more than what's actually available.
+        if additional_investment > 0:
+            remaining = additional_investment
+            for analysis in analyses:
+                if analysis.status == 'underweight' and analysis.rebalance_amount > 0 and remaining > 0:
+                    amount = min(analysis.rebalance_amount, remaining)
+                    analysis.capped_investment_amount = amount
+                    remaining -= amount
+
         # Generate suggestions
         suggestions = PortfolioCalculator._generate_suggestions(analyses, additional_investment)
 
@@ -252,6 +263,72 @@ class PortfolioCalculator:
                     )
 
         return suggestions
+
+    @staticmethod
+    def fit_asset_investments_to_budget(
+        assets_with_targets: List[Tuple[str, float, float]],
+        assets_without_targets: List[Tuple[str, float]],
+        budget: float
+    ) -> Dict[str, float]:
+        """
+        Distribute a fixed category budget across assets, respecting per-asset targets
+        without ever exceeding the budget in total.
+
+        Args:
+            assets_with_targets: list of (asset_name, current_value, target_pct) for assets
+                that have a defined target percentage within the category. target_pct is
+                relative to the category's post-investment total.
+            assets_without_targets: list of (asset_name, current_value) for assets with no
+                defined target - they split whatever budget is left, proportionally to
+                their current value.
+            budget: total amount of new money available for this category (already capped
+                against the shared additional_investment pool).
+
+        Returns:
+            {asset_name: amount_to_invest} - values always sum to at most `budget`.
+        """
+        investments: Dict[str, float] = {}
+
+        if budget <= 0:
+            for name, _ in assets_without_targets:
+                investments[name] = 0.0
+            for name, _, _ in assets_with_targets:
+                investments[name] = 0.0
+            return investments
+
+        # post_total solves: budget = sum(target_pct_i/100 * post_total - current_i) for targeted assets
+        # plus whatever's left over proportionally distributed to non-targeted assets (which doesn't
+        # affect post_total for targeted assets). We only need post_total to size targeted assets,
+        # using the same post_category_total definition callers already use (total_category_value + budget).
+        total_current = sum(v for _, v in assets_without_targets) + sum(v for _, v, _ in assets_with_targets)
+        post_category_total = total_current + budget
+
+        raw_target_investments = {
+            name: max(0.0, (target_pct / 100) * post_category_total - current_value)
+            for name, current_value, target_pct in assets_with_targets
+        }
+        budget_used = sum(raw_target_investments.values())
+
+        if budget_used > budget:
+            # Targeted assets alone already exceed the budget - scale them down proportionally
+            # so they sum to exactly `budget`, and leave nothing for non-targeted assets.
+            scale = (budget / budget_used) if budget_used > 0 else 0.0
+            for name, amount in raw_target_investments.items():
+                investments[name] = amount * scale
+            for name, _ in assets_without_targets:
+                investments[name] = 0.0
+        else:
+            investments.update(raw_target_investments)
+            remaining_budget = budget - budget_used
+            value_no_target = sum(v for _, v in assets_without_targets)
+            for name, current_value in assets_without_targets:
+                proportion = (
+                    current_value / value_no_target if value_no_target > 0
+                    else (1 / len(assets_without_targets) if assets_without_targets else 0)
+                )
+                investments[name] = max(0.0, remaining_budget * proportion)
+
+        return investments
 
     @staticmethod
     def calculate_historical_growth(

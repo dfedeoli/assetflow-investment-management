@@ -27,6 +27,7 @@ env/
 *.png
 *.jpg
 *.jpeg
+utils/pdf_snapshot_data.py
 
 # Environment and secrets
 .env

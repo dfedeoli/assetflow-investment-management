@@ -333,6 +333,13 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
         # Calculate difference based on current percentage vs target
         diff_pct = current_pct - analysis.target_percentage
 
+        # When there's new money to invest, show the amount actually allocated to this
+        # category (capped by the shared pool), not the raw isolated distance-to-target.
+        if additional_investment > 0 and analysis.status == 'underweight':
+            display_amount = analysis.capped_investment_amount
+        else:
+            display_amount = analysis.rebalance_amount
+
         comparison_data.append({
             'Status': status_emoji.get(analysis.status, ''),
             'Categoria': analysis.label,
@@ -340,7 +347,7 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
             'Meta': f"{analysis.target_percentage:.1f}%",
             'Diferença': f"{diff_pct:+.1f}%",
             'Valor Atual': f"R$ {analysis.current_value:,.2f}",
-            'Ajuste Necessário': f"R$ {analysis.rebalance_amount:+,.2f}" if abs(analysis.rebalance_amount) > 1 else "✓"
+            'Ajuste Necessário': f"R$ {display_amount:+,.2f}" if abs(display_amount) > 1 else "✓"
         })
 
     st.dataframe(comparison_data, use_container_width=True, hide_index=True)
@@ -352,27 +359,22 @@ def _render_rebalancing(positions, reserve_positions, db: Database, total_value:
     if additional_investment > 0:
         st.info(f"Você tem R$ {additional_investment:,.2f} para investir.")
 
-        # Find categories that need investment
-        underweight = [a for a in plan.analyses if a.rebalance_amount > 0]
+        # Find categories that received an allocation from the shared new-money pool
+        underweight = [a for a in plan.analyses if a.capped_investment_amount > 0]
 
         if underweight:
             st.write("\nSugestão de alocação do novo investimento:")
-            remaining = additional_investment
 
             for analysis in underweight:
-                if remaining <= 0:
-                    break
-
-                amount = min(analysis.rebalance_amount, remaining)
                 # Calculate current percentage of current total
                 current_pct = (analysis.current_value / current_total * 100) if current_total > 0 else 0
                 st.write(
-                    f"  - Investir R$ {amount:,.2f} em {analysis.label} "
+                    f"  - Investir R$ {analysis.capped_investment_amount:,.2f} em {analysis.label} "
                     f"(atual {current_pct:.1f}% → meta {analysis.target_percentage:.1f}%)"
                 )
-                remaining -= amount
 
-            if remaining > 0:
+            remaining = additional_investment - sum(a.capped_investment_amount for a in plan.analyses)
+            if remaining > 0.01:
                 st.write(
                     f"\nSobram R$ {remaining:,.2f}. Distribua proporcionalmente entre as categorias "
                     f"ou mantenha em reserva."
@@ -456,6 +458,13 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
 
         category_positions = positions_by_label[analysis.label]
 
+        # Money actually available to invest in this category: when there's new money,
+        # use the amount capped by the shared additional_investment pool (never the raw,
+        # isolated distance-to-target) so this matches what's shown in the comparison table above.
+        category_budget = (
+            analysis.capped_investment_amount if additional_investment > 0 else analysis.rebalance_amount
+        )
+
         # Determine emoji and color based on status
         if analysis.status == 'balanced':
             status_emoji = "✅"
@@ -470,7 +479,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
         # Create expander for each category
         with st.expander(
             f"{status_emoji} **{analysis.label}** - {status_text} | "
-            f"Ajuste: R$ {analysis.rebalance_amount:+,.2f}"
+            f"Ajuste: R$ {category_budget:+,.2f}"
         ):
             # Calculate percentages for display
             current_total = sum(a.current_value for a in plan.analyses)
@@ -485,7 +494,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
                     st.metric("Alocação", f"{current_pct:.1f}%")
 
                 with col2:
-                    new_value = analysis.current_value + analysis.rebalance_amount
+                    new_value = analysis.current_value + category_budget
                     post_investment_pct = (new_value / plan.total_portfolio_value * 100) if plan.total_portfolio_value > 0 else 0
                     st.metric("Pós-Investimento", f"R$ {new_value:,.2f}")
                     st.metric("Alocação", f"{post_investment_pct:.1f}%")
@@ -541,18 +550,36 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
             # Recommendations
             st.divider()
 
-            if abs(analysis.rebalance_amount) < 10:
-                st.success("✅ Esta categoria está balanceada. Nenhuma ação necessária.")
-            elif analysis.rebalance_amount > 0:
+            if analysis.status == 'overweight' and additional_investment > 0:
+                # Has additional investment but category is still overweight - budget was
+                # correctly not allocated here regardless of the raw rebalance_amount.
+                st.info(
+                    f"💡 Esta categoria está {abs(analysis.difference_percentage):.1f}% acima da meta. "
+                    f"Considere não adicionar mais recursos aqui e focar nas categorias abaixo da meta."
+                )
+            elif abs(category_budget) < 10:
+                if additional_investment > 0 and analysis.rebalance_amount > 10:
+                    st.info(
+                        f"💡 Esta categoria precisaria de R$ {analysis.rebalance_amount:,.2f} para atingir a meta, "
+                        f"mas o investimento disponível já foi alocado a outras categorias mais prioritárias."
+                    )
+                else:
+                    st.success("✅ Esta categoria está balanceada. Nenhuma ação necessária.")
+            elif category_budget > 0:
                 # Need to add money
                 st.info(
-                    f"**Ação recomendada:** Investir R$ {analysis.rebalance_amount:,.2f} nesta categoria"
+                    f"**Ação recomendada:** Investir R$ {category_budget:,.2f} nesta categoria"
                 )
+                if additional_investment > 0 and category_budget < analysis.rebalance_amount - 0.01:
+                    st.caption(
+                        f"ℹ️ A categoria precisaria de R$ {analysis.rebalance_amount:,.2f} para atingir a meta "
+                        f"totalmente, mas apenas R$ {category_budget:,.2f} do investimento disponível foi alocado aqui."
+                    )
 
                 st.write("**💡 Estratégias de investimento:**")
 
-                # Post-investment category total (current holdings + the rebalance amount for this category)
-                post_category_total = total_category_value + analysis.rebalance_amount
+                # Post-investment category total (current holdings + the actual money available for this category)
+                post_category_total = total_category_value + category_budget
 
                 # Strategy: Target-driven (shown first when per-asset targets exist)
                 assets_with_targets = [pos for pos in sorted_positions if pos.name in asset_targets]
@@ -561,43 +588,27 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
                 if assets_with_targets:
                     st.write("**Distribuição por Meta (Metas por Ativo):**")
                     st.caption(
-                        "Quanto investir em cada ativo para que a categoria inteira atinja as metas definidas. "
+                        "Quanto investir em cada ativo para que a categoria inteira atinja as metas definidas, "
+                        "sem exceder o valor disponível para esta categoria. "
                         "Ativos sem meta recebem o restante proporcional ao valor atual."
                     )
 
-                    # Compute target values for assets that have targets
-                    target_values = {
-                        pos.name: (asset_targets[pos.name] / 100) * post_category_total
-                        for pos in assets_with_targets
-                    }
-                    target_investments = {
-                        name: max(0.0, tv - next(p.value for p in sorted_positions if p.name == name))
-                        for name, tv in target_values.items()
-                    }
+                    investments = PortfolioCalculator.fit_asset_investments_to_budget(
+                        assets_with_targets=[
+                            (pos.name, pos.value, asset_targets[pos.name]) for pos in assets_with_targets
+                        ],
+                        assets_without_targets=[
+                            (pos.name, pos.value) for pos in assets_without_targets
+                        ],
+                        budget=category_budget
+                    )
 
-                    # Remaining budget for assets without targets
-                    budget_used = sum(target_investments.values())
-                    remaining_budget = analysis.rebalance_amount - budget_used
-
-                    # Distribute remaining proportionally among assets without targets
-                    value_no_target = sum(p.value for p in assets_without_targets)
-                    no_target_investments = {}
-                    for pos in assets_without_targets:
-                        proportion = pos.value / value_no_target if value_no_target > 0 else (1 / len(assets_without_targets) if assets_without_targets else 0)
-                        no_target_investments[pos.name] = max(0.0, remaining_budget * proportion)
-
-                    # Pre-compute new totals so the denominator is the actual post-investment sum
-                    new_totals = {}
-                    for pos in sorted_positions:
-                        if pos.name in target_investments:
-                            new_totals[pos.name] = pos.value + target_investments[pos.name]
-                        else:
-                            new_totals[pos.name] = pos.value + no_target_investments.get(pos.name, 0.0)
+                    new_totals = {pos.name: pos.value + investments.get(pos.name, 0.0) for pos in sorted_positions}
                     actual_post_total = sum(new_totals.values())
 
                     target_data = []
                     for pos in sorted_positions:
-                        invest = target_investments.get(pos.name, no_target_investments.get(pos.name, 0.0))
+                        invest = investments.get(pos.name, 0.0)
                         new_total = new_totals[pos.name]
                         new_pct = (new_total / actual_post_total * 100) if actual_post_total > 0 else 0
                         target_data.append({
@@ -616,7 +627,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
                 prop_data = []
                 for pos in sorted_positions:
                     proportion = pos.value / total_category_value if total_category_value > 0 else (1 / len(sorted_positions))
-                    amount_to_invest = analysis.rebalance_amount * proportion
+                    amount_to_invest = category_budget * proportion
                     prop_data.append({
                         'Ativo': pos.name,
                         'Valor a Investir': f"R$ {amount_to_invest:,.2f}",
@@ -625,7 +636,7 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
                 st.dataframe(prop_data, use_container_width=True, hide_index=True)
 
                 st.write("**Opção - Distribuição igual:**")
-                equal_amount = analysis.rebalance_amount / len(sorted_positions)
+                equal_amount = category_budget / len(sorted_positions)
                 equal_data = []
                 for pos in sorted_positions:
                     equal_data.append({
@@ -636,37 +647,31 @@ def _render_asset_level_rebalancing(positions, plan, additional_investment, db: 
                 st.dataframe(equal_data, use_container_width=True, hide_index=True)
 
             else:
-                # Need to reduce money - only show if no additional investment
-                if additional_investment == 0:
-                    st.warning(
-                        f"**Ação recomendada:** Reduzir R$ {abs(analysis.rebalance_amount):,.2f} desta categoria"
-                    )
+                # Need to reduce money - only reachable when there's no additional investment
+                # (the additional_investment > 0 overweight case is handled above).
+                st.warning(
+                    f"**Ação recomendada:** Reduzir R$ {abs(analysis.rebalance_amount):,.2f} desta categoria"
+                )
 
-                    st.write("**💡 Estratégias de desinvestimento:**")
-                    st.caption("⚠️ Considere adicionar novo dinheiro ao invés de vender posições existentes")
+                st.write("**💡 Estratégias de desinvestimento:**")
+                st.caption("⚠️ Considere adicionar novo dinheiro ao invés de vender posições existentes")
 
-                    # Strategy 1: Proportional reduction
-                    st.write("**Opção 1 - Redução proporcional:**")
-                    reduction_data = []
-                    for pos in sorted_positions:
-                        proportion = pos.value / total_category_value if total_category_value > 0 else (1 / len(sorted_positions))
-                        amount_to_reduce = abs(analysis.rebalance_amount) * proportion
-                        reduction_data.append({
-                            'Ativo': pos.name,
-                            'Valor a Reduzir': f"R$ {amount_to_reduce:,.2f}",
-                            'Novo Total': f"R$ {max(0, pos.value - amount_to_reduce):,.2f}"
-                        })
-                    st.dataframe(reduction_data, use_container_width=True, hide_index=True)
+                # Strategy 1: Proportional reduction
+                st.write("**Opção 1 - Redução proporcional:**")
+                reduction_data = []
+                for pos in sorted_positions:
+                    proportion = pos.value / total_category_value if total_category_value > 0 else (1 / len(sorted_positions))
+                    amount_to_reduce = abs(analysis.rebalance_amount) * proportion
+                    reduction_data.append({
+                        'Ativo': pos.name,
+                        'Valor a Reduzir': f"R$ {amount_to_reduce:,.2f}",
+                        'Novo Total': f"R$ {max(0, pos.value - amount_to_reduce):,.2f}"
+                    })
+                st.dataframe(reduction_data, use_container_width=True, hide_index=True)
 
-                    # Strategy 2: Sell specific positions
-                    st.write("**Opção 2 - Vender posições específicas:**")
-                    st.caption("Considere vender ativos começando pelos de menor valor ou menor performance")
-                else:
-                    # Has additional investment but category is still overweight
-                    st.info(
-                        f"💡 Esta categoria está {abs(analysis.difference_percentage):.1f}% acima da meta. "
-                        f"Considere não adicionar mais recursos aqui e focar nas categorias abaixo da meta."
-                    )
+                # Strategy 2: Sell specific positions
+                st.write("**Opção 2 - Vender posições específicas:**")
+                st.caption("Considere vender ativos começando pelos de menor valor ou menor performance")
 
 
 def _render_asset_targets_management(db: Database):
